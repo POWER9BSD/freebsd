@@ -132,7 +132,40 @@ get_cyclecount(void)
 }
 
 #define	cpu_getstack(td)	((td)->td_frame->fixreg[1])
+
+/* Macros for adjusting thread priority (hardware multi-threading) */
+#define HMT_very_low()   __asm __volatile("or 31,31,31   # very low priority")
+#define HMT_low()	 __asm __volatile("or 1,1,1	     # low priority")
+#define HMT_medium_low() __asm __volatile("or 6,6,6      # medium low priority")
+#define HMT_medium()	 __asm __volatile("or 2,2,2	     # medium priority")
+#define HMT_medium_high() __asm __volatile("or 5,5,5      # medium high priority")
+#define HMT_high()	 __asm __volatile("or 3,3,3	     # high priority")
+
+#ifdef __powerpc64__
+#define cpu_spinwait()	do { HMT_low(); HMT_medium(); __compiler_membar(); } while (0)
+
+#define cpu_spin_begin()	HMT_low()
+
+#define cpu_spin_end()	HMT_medium()
+
+#define spin_do_until_cond(op, cond)	\
+do {								\
+	if (unlikely(!(cond))) {				\
+		cpu_spin_begin();					\
+		do {						\
+			op;							\
+			__compiler_membar();		\
+		} while (!(cond));				\
+		cpu_spin_end();					\
+	}							\
+} while (0)
+
+#define spin_until_cond(cond) spin_do_until_cond((), cond)
+#define cpu_lock_delay()	HMT_low()
+#define cpu_lock_delay_end()	HMT_medium()
+#else
 #define	cpu_spinwait()		__asm __volatile("or 27,27,27") /* yield */
+#endif
 
 extern char btext[];
 extern char etext[];

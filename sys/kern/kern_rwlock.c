@@ -506,6 +506,7 @@ __rw_rlock_hard(struct rwlock *rw, struct thread *td, uintptr_t v
 					v = RW_READ_VALUE(rw);
 					owner = lv_rw_wowner(v);
 				} while (owner != NULL && TD_IS_RUNNING(owner));
+				cpu_lock_delay_end();
 				KTR_STATE0(KTR_SCHED, "thread",
 				    sched_tdname(curthread), "running");
 				continue;
@@ -1010,6 +1011,7 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t v LOCK_FILE_LINE_ARG_DEF)
 				v = RW_READ_VALUE(rw);
 				owner = lv_rw_wowner(v);
 			} while (owner != NULL && TD_IS_RUNNING(owner));
+			cpu_lock_delay_end();
 			KTR_STATE0(KTR_SCHED, "thread", sched_tdname(curthread),
 			    "running");
 			continue;

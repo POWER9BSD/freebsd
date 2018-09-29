@@ -120,6 +120,10 @@ static u_int __read_mostly restrict_starvation = 0;
 SYSCTL_INT(_debug_lock_delay, OID_AUTO, restrict_starvation, CTLFLAG_RW,
     &restrict_starvation, 0, "");
 
+#ifndef cpu_lock_delay
+#define cpu_lock_delay cpu_spinwait
+#endif
+
 void
 lock_delay(struct lock_delay_arg *la)
 {
@@ -131,7 +135,7 @@ lock_delay(struct lock_delay_arg *la)
 		la->delay = lc->max;
 
 	for (i = la->delay; i > 0; i--)
-		cpu_spinwait();
+		cpu_lock_delay();
 
 	la->spin_cnt += la->delay;
 	if (__predict_false(la->spin_cnt > starvation_limit)) {
