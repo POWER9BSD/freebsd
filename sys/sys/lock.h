@@ -246,6 +246,10 @@ lock_delay_arg_init(struct lock_delay_arg *la, struct lock_delay_config *lc)
 	SYSINIT(lock_delay_##lc##_ld, SI_SUB_LOCK, SI_ORDER_ANY, \
 	    lock_delay_default_init, &lc)
 
+#ifndef __powerpc64__
+#define cpu_lock_delay_end()
+#endif
+
 void	lock_init(struct lock_object *, struct lock_class *,
 	    const char *, const char *, int);
 void	lock_destroy(struct lock_object *);

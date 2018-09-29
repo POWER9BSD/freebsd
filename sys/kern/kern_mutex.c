@@ -576,6 +576,7 @@ __mtx_lock_sleep(volatile uintptr_t *c, uintptr_t v)
 				v = MTX_READ_VALUE(m);
 				owner = lv_mtx_owner(v);
 			} while (v != MTX_UNOWNED && TD_IS_RUNNING(owner));
+			cpu_lock_delay_end();
 			KTR_STATE0(KTR_SCHED, "thread",
 			    sched_tdname((struct thread *)tid),
 			    "running");
@@ -749,6 +750,7 @@ _mtx_lock_spin_cookie(volatile uintptr_t *c, uintptr_t v)
 			}
 			v = MTX_READ_VALUE(m);
 		} while (v != MTX_UNOWNED);
+		cpu_lock_delay_end();
 		spinlock_enter();
 	}
 
@@ -913,6 +915,7 @@ retry:
 				}
 				v = MTX_READ_VALUE(m);
 			} while (v != MTX_UNOWNED);
+			cpu_lock_delay_end();
 			spinlock_enter();
 		}
 		if (m == td->td_lock)

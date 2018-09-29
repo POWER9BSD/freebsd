@@ -693,6 +693,7 @@ _sx_xlock_hard(struct sx *sx, uintptr_t x, int opts LOCK_FILE_LINE_ARG_DEF)
 				x = SX_READ_VALUE(sx);
 				owner = lv_sx_owner(x);
 			} while (owner != NULL && TD_IS_RUNNING(owner));
+			cpu_lock_delay_end();
 			KTR_STATE0(KTR_SCHED, "thread", sched_tdname(curthread),
 			    "running");
 			continue;
@@ -1118,6 +1119,7 @@ _sx_slock_hard(struct sx *sx, int opts, uintptr_t x LOCK_FILE_LINE_ARG_DEF)
 					x = SX_READ_VALUE(sx);
 					owner = lv_sx_owner(x);
 				} while (owner != NULL && TD_IS_RUNNING(owner));
+				cpu_lock_delay_end();
 				KTR_STATE0(KTR_SCHED, "thread",
 				    sched_tdname(curthread), "running");
 				continue;
