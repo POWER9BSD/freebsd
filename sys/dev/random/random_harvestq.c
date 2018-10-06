@@ -216,6 +216,8 @@ random_sources_feed(void)
 	uint32_t entropy[HARVESTSIZE];
 	struct random_sources *rrs;
 	u_int i, n, local_read_rate;
+	static struct timeval lastfail;
+	static int curfail;
 
 	/*
 	 * Step over all of live entropy sources, and feed their output
@@ -241,7 +243,8 @@ random_sources_feed(void)
 			 * can that source be trusted?
 			 */
 			if (n == 0) {
-				printf("%s: rs_read for hardware device '%s' returned no entropy.\n", __func__, rrs->rrs_source->rs_ident);
+				if (ppsratecheck(&lastfail, &curfail, 1))
+					printf("%s: rs_read for hardware device '%s' returned no entropy.\n", __func__, rrs->rrs_source->rs_ident);
 				continue;
 			}
 			random_harvest_direct(entropy, n, rrs->rrs_source->rs_source);
