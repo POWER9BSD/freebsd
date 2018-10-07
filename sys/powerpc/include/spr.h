@@ -117,7 +117,14 @@
 #define	  SRR1_ISI_PFAULT	0x40000000 /* ISI page not found */
 #define	  SRR1_ISI_NOEXECUTE	0x10000000 /* Memory marked no-execute */
 #define	  SRR1_ISI_PP		0x08000000 /* PP bits forbid access */
+#define SPR_CFAR	0x1c	/* Come From Address Register */
+#define SPR_AMR	0x1d	/* Authority Mask Register */
+#define SPR_UAMOR	0x9d	/* User Authority Mask Override Register */
+#define SPR_AMOR	0x15d	/* Authority Mask Override Register */
+
 #define	SPR_DECAR		0x036	/* ..8 Decrementer auto reload */
+#define SPR_IAMR	0x03D		/* Instr. Authority Mask Reg */
+
 #define	SPR_EIE			0x050	/* ..8 Exception Interrupt ??? */
 #define	SPR_EID			0x051	/* ..8 Exception Interrupt ??? */
 #define	SPR_NRI			0x052	/* ..8 Exception Interrupt ??? */
@@ -240,7 +247,10 @@
 #define	  LPCR_PECE_EXT           (1ULL << 14) /* External exceptions */
 #define	  LPCR_PECE_DECR          (1ULL << 13) /* Decrementer exceptions */
 #define	  LPCR_PECE_ME            (1ULL << 12) /* Machine Check and Hypervisor */
-                                               /* Maintenance exceptions */
+#define   LPCR_UPRT				0x0000000000400000UL      /* Use Process Table (ISA 3) */
+#define   LPCR_HR				0x0000000000100000UL
+
+
 #define	SPR_LPID		0x13f	/* Logical Partitioning Control */
 
 #define	SPR_PTCR		0x1d0	/* Partition Table Control Register */
