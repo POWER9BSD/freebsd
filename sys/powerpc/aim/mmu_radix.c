@@ -222,17 +222,199 @@ MMU_DEF(mmu_radix, MMU_TYPE_RADIX, mmu_radix_methods, 0);
 #define DUMPMETHODVOID(m) mmu_radix_dumpsys_ ## m(mmu_t mmup)
 #define VISIBILITY static
 #else
-#define METHOD(m) pmap_ ## m
-#define METHOD(m) dumpsys_ ## m
+#define METHOD(m) pmap_ ## m(
+#define METHODVOID(m) pmap_ ## m(void)
+#define DUMPMETHOD(m) dumpsys_ ## m(
+#define DUMPMETHODVOID(m) dumpsys_ ## m(void)
 #define VISIBILITY
 #endif
 
 #define UNIMPLEMENTED() panic("%s not implemented", __func__)
 
+/*
+ * Map of physical memory regions.
+ */
+static struct	mem_region *regions;
+static struct	mem_region *pregions;
+static u_int	phys_avail_count;
+static int	regions_sz, pregions_sz;
+
+
+static void
+mmu_radix_init_amor(void)
+{
+	/*
+	* In HV mode, we init AMOR (Authority Mask Override Register) so that
+	* the hypervisor and guest can setup IAMR (Instruction Authority Mask
+	* Register), enable key 0 and set it to 1.
+	*
+	* AMOR = 0b1100 .... 0000 (Mask for key 0 is 11)
+	*/
+	mtspr(SPR_AMOR, (3ul << 62));
+}
+
+static void
+mmu_radix_init_iamr(void)
+{
+	/*
+	 * Radix always uses key0 of the IAMR to determine if an access is
+	 * allowed. We set bit 0 (IBM bit 1) of key0, to prevent instruction
+	 * fetch.
+	 */
+	mtspr(SPR_IAMR, (1ul << 62));
+}
+
+/* Quick sort callout for comparing physical addresses. */
+static int
+pa_cmp(const void *a, const void *b)
+{
+	const vm_paddr_t *pa = a, *pb = b;
+
+	if (*pa < *pb)
+		return (-1);
+	else if (*pa > *pb)
+		return (1);
+	else
+		return (0);
+}
+
+static void
+mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
+{
+	vm_paddr_t	kpstart, kpend;
+	vm_size_t	physsz, hwphyssz;
+	int		rm_pavail;
+	int		i, j;
+
+	kpstart = start & ~DMAP_BASE_ADDRESS;
+	kpend = end & ~DMAP_BASE_ADDRESS;
+
+	/* Get physical memory regions from firmware */
+	mem_regions(&pregions, &pregions_sz, &regions, &regions_sz);
+	CTR0(KTR_PMAP, "mmu_radix_early_bootstrap: physical memory");
+
+	if (sizeof(phys_avail)/sizeof(phys_avail[0]) < regions_sz)
+		panic("mmu_radix_early_bootstrap: phys_avail too small");
+
+	phys_avail_count = 0;
+	physsz = 0;
+	hwphyssz = 0;
+	TUNABLE_ULONG_FETCH("hw.physmem", (u_long *) &hwphyssz);
+	for (i = 0, j = 0; i < regions_sz; i++, j += 2) {
+		CTR3(KTR_PMAP, "region: %#zx - %#zx (%#zx)",
+		    regions[i].mr_start, regions[i].mr_start +
+		    regions[i].mr_size, regions[i].mr_size);
+		if (hwphyssz != 0 &&
+		    (physsz + regions[i].mr_size) >= hwphyssz) {
+			if (physsz < hwphyssz) {
+				phys_avail[j] = regions[i].mr_start;
+				phys_avail[j + 1] = regions[i].mr_start +
+				    hwphyssz - physsz;
+				physsz = hwphyssz;
+				phys_avail_count++;
+			}
+			break;
+		}
+		phys_avail[j] = regions[i].mr_start;
+		phys_avail[j + 1] = regions[i].mr_start + regions[i].mr_size;
+		phys_avail_count++;
+		physsz += regions[i].mr_size;
+	}
+
+	/* Check for overlap with the kernel and exception vectors */
+	rm_pavail = 0;
+	for (j = 0; j < 2*phys_avail_count; j+=2) {
+		if (phys_avail[j] < EXC_LAST)
+			phys_avail[j] += EXC_LAST;
+
+		if (phys_avail[j] >= kpstart &&
+		    phys_avail[j+1] <= kpend) {
+			phys_avail[j] = phys_avail[j+1] = ~0;
+			rm_pavail++;
+			continue;
+		}
+
+		if (kpstart >= phys_avail[j] &&
+		    kpstart < phys_avail[j+1]) {
+			if (kpend < phys_avail[j+1]) {
+				phys_avail[2*phys_avail_count] =
+				    (kpend & ~PAGE_MASK) + PAGE_SIZE;
+				phys_avail[2*phys_avail_count + 1] =
+				    phys_avail[j+1];
+				phys_avail_count++;
+			}
+
+			phys_avail[j+1] = kpstart & ~PAGE_MASK;
+		}
+
+		if (kpend >= phys_avail[j] &&
+		    kpend < phys_avail[j+1]) {
+			if (kpstart > phys_avail[j]) {
+				phys_avail[2*phys_avail_count] = phys_avail[j];
+				phys_avail[2*phys_avail_count + 1] =
+				    kpstart & ~PAGE_MASK;
+				phys_avail_count++;
+			}
+
+			phys_avail[j] = (kpend & ~PAGE_MASK) +
+			    PAGE_SIZE;
+		}
+	}
+
+	/* Remove physical available regions marked for removal (~0) */
+	if (rm_pavail) {
+		qsort(phys_avail, 2*phys_avail_count, sizeof(phys_avail[0]),
+			pa_cmp);
+		phys_avail_count -= rm_pavail;
+		for (i = 2*phys_avail_count;
+		     i < 2*(phys_avail_count + rm_pavail); i+=2)
+			phys_avail[i] = phys_avail[i+1] = 0;
+	}
+	physmem = btoc(physsz);	
+}
+
+static void
+mmu_radix_parttab_init(vm_paddr_t pdbase)
+{
+	uint64_t rts_field;
+	uint64_t field0;
+
+	/*
+	 * We support 52 bits, hence:
+	 * bits 52 - 31 = 21, 0b10101
+	 * RTS encoding details
+	 * bits 0 - 3 of rts -> bits 6 - 8 unsigned long
+	 * bits 4 - 5 of rts -> bits 62 - 63 of unsigned long
+	 */
+	rts_field = (0x2UL << 61) | (0x5UL << 5);
+	field0 = rts_field | pdbase | 
+}
+
 
 VISIBILITY void
 METHOD(advise) pmap_t pmap, vm_offset_t start, vm_offset_t end, int advice)
 {
+	UNIMPLEMENTED();
+}
+
+/*
+ * Routines used in machine-dependent code
+ */
+VISIBILITY void
+METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
+{
+	uint64_t lpcr;
+
+	printf("%s\n", __func__);
+	mmu_radix_early_bootstrap(start, end);
+	/* XXX assume we're starting non-virtualized */
+	lpcr = mfspr(SPR_LPCR);
+	mtspr(SPR_LPCR, lpcr | LPCR_UPRT | LPCR_HR);
+	/* XXX init partition table */
+	mmu_radix_init_amor();
+	/* NV end */
+
+	mmu_radix_init_iamr();
 	UNIMPLEMENTED();
 }
 
@@ -564,16 +746,6 @@ METHOD(align_superpage) vm_object_t object, vm_ooffset_t offset,
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %p, %#x)", __func__, object, offset, addr,
 	    size);
-	UNIMPLEMENTED();
-}
-
-/*
- * Routines used in machine-dependent code
- */
-VISIBILITY void
-METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
-{
-
 	UNIMPLEMENTED();
 }
 
