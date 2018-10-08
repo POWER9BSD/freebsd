@@ -35,9 +35,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/conf.h>
 #include <sys/queue.h>
 #include <sys/cpuset.h>
+#include <sys/endian.h>
 #include <sys/kerneldump.h>
 #include <sys/ktr.h>
 #include <sys/lock.h>
+#include <sys/syslog.h>
 #include <sys/msgbuf.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
@@ -227,9 +229,61 @@ MMU_DEF(mmu_radix, MMU_TYPE_RADIX, mmu_radix_methods, 0);
 #define DUMPMETHOD(m) dumpsys_ ## m(
 #define DUMPMETHODVOID(m) dumpsys_ ## m(void)
 #define VISIBILITY
+
+struct pmap kernel_pmap_store;
+
 #endif
 
 #define UNIMPLEMENTED() panic("%s not implemented", __func__)
+
+#define RIC_FLUSH_TLB 0
+#define RIC_FLUSH_PWC 1
+#define RIC_FLUSH_ALL 2
+
+#define POWER9_TLB_SETS_RADIX	128	/* # sets in POWER9 TLB Radix mode */
+
+#define PPC_INST_TLBIE			0x7c000264
+#define PPC_INST_TLBIEL			0x7c000224
+#define PPC_INST_SLBIA			0x7c0003e4
+
+#define TLBIEL_INVAL_SEL_MASK	0xc00	/* invalidation selector */
+#define  TLBIEL_INVAL_PAGE	0x000	/* invalidate a single page */
+#define  TLBIEL_INVAL_SET_LPID	0x800	/* invalidate a set for current LPID */
+#define  TLBIEL_INVAL_SET	0xc00	/* invalidate a set for all LPIDs */
+
+#define ___PPC_RA(a)	(((a) & 0x1f) << 16)
+#define ___PPC_RB(b)	(((b) & 0x1f) << 11)
+#define ___PPC_RS(s)	(((s) & 0x1f) << 21)
+#define ___PPC_RT(t)	___PPC_RS(t)
+#define ___PPC_R(r)	(((r) & 0x1) << 16)
+#define ___PPC_PRS(prs)	(((prs) & 0x1) << 17)
+#define ___PPC_RIC(ric)	(((ric) & 0x3) << 18)
+
+#define PPC_SLBIA(IH)	__XSTRING(.long PPC_INST_SLBIA | \
+				       ((IH & 0x7) << 21))
+#define	PPC_TLBIE_5(rb,rs,ric,prs,r)				\
+	__XSTRING(.long PPC_INST_TLBIE |								\
+			  ___PPC_RB(rb) | ___PPC_RS(rs) |						\
+			  ___PPC_RIC(ric) | ___PPC_PRS(prs) |					\
+			  ___PPC_R(r))
+
+#define	PPC_TLBIEL(rb,rs,ric,prs,r) \
+	 __XSTRING(.long PPC_INST_TLBIEL | \
+			   ___PPC_RB(rb) | ___PPC_RS(rs) |			\
+			   ___PPC_RIC(ric) | ___PPC_PRS(prs) |		\
+			   ___PPC_R(r))
+
+#define PPC_INVALIDATE_ERAT		PPC_SLBIA(7)
+
+/* Number of supported PID bits */
+static unsigned int isa3_pid_bits;
+
+/* PID to start allocating from */
+static unsigned int isa3_base_pid;
+
+#define PROCTAB_SIZE_SHIFT	(isa3_pid_bits + 4)
+#define PROCTAB_ENTRIES	(1ul << isa3_pid_bits)
+
 
 /*
  * Map of physical memory regions.
@@ -238,7 +292,91 @@ static struct	mem_region *regions;
 static struct	mem_region *pregions;
 static u_int	phys_avail_count;
 static int	regions_sz, pregions_sz;
+static struct pate *isa3_parttab;
+static struct prte *isa3_proctab;
 
+#define	RADIX_PGD_SIZE_SHIFT	16
+#define RADIX_PGD_SIZE	(1UL << RADIX_PGD_SIZE_SHIFT)
+
+#define	RADIX_PGD_INDEX_SHIFT	(RADIX_PGD_SIZE_SHIFT-3)
+
+/* POWER9 only permits a 64k partition table size. */
+#define	PARTTAB_SIZE_SHIFT	16
+#define PARTTAB_SIZE	(1UL << PARTTAB_SIZE_SHIFT)
+
+#define PARTTAB_HR		(1UL << 63) /* host uses radix */
+#define PARTTAB_GR		(1UL << 63) /* guest uses radix must match host */
+
+/* TLB flush actions. Used as argument to tlbiel_all() */
+enum {
+	TLB_INVAL_SCOPE_LPID = 0,	/* invalidate TLBs for current LPID */
+	TLB_INVAL_SCOPE_GLOBAL = 1,	/* invalidate all TLBs */
+};
+
+/*
+ * We support 52 bits, hence:
+ * bits 52 - 31 = 21, 0b10101
+ * RTS encoding details
+ * bits 0 - 3 of rts -> bits 6 - 8 unsigned long
+ * bits 4 - 5 of rts -> bits 62 - 63 of unsigned long
+ */
+#define RTS_SIZE ((0x2UL << 61) | (0x5UL << 5))
+
+
+static int powernv_enabled = 1;
+
+
+static inline void
+tlbiel_radix_set_isa300(uint32_t set, uint32_t is,
+	uint32_t pid, uint32_t ric, uint32_t prs)
+{
+	uint64_t rb;
+	uint64_t rs;
+
+	rb = PPC_BITLSHIFT_VAL(set, 51) | PPC_BITLSHIFT_VAL(is, 53);
+	rs = PPC_BITLSHIFT_VAL((uint64_t)pid, 31);
+
+	__asm __volatile(PPC_TLBIEL(%0, %1, %2, %3, 1)
+		     : : "r"(rb), "r"(rs), "i"(ric), "i"(prs)
+		     : "memory");
+}
+
+static void
+tlbiel_flush_isa3(uint32_t num_sets, uint32_t is)
+{
+	uint32_t set;
+
+	__asm __volatile("ptesync": : :"memory");
+
+	/*
+	 * Flush the first set of the TLB, and the entire Page Walk Cache
+	 * and partition table entries. Then flush the remaining sets of the
+	 * TLB.
+	 */
+	tlbiel_radix_set_isa300(0, is, 0, RIC_FLUSH_ALL, 0);
+	for (set = 1; set < num_sets; set++)
+		tlbiel_radix_set_isa300(set, is, 0, RIC_FLUSH_TLB, 0);
+
+	/* Do the same for process scoped entries. */
+	tlbiel_radix_set_isa300(0, is, 0, RIC_FLUSH_ALL, 1);
+	for (set = 1; set < num_sets; set++)
+		tlbiel_radix_set_isa300(set, is, 0, RIC_FLUSH_TLB, 1);
+
+	__asm __volatile("ptesync": : :"memory");
+}
+
+static void
+mmu_radix_tlbiel_flush(int scope)
+{
+	int is;
+
+	MPASS(scope == TLB_INVAL_SCOPE_LPID ||
+		  scope == TLB_INVAL_SCOPE_GLOBAL);
+	is = scope + 2;
+
+	tlbiel_flush_isa3(POWER9_TLB_SETS_RADIX, is);
+	__asm __volatile(PPC_INVALIDATE_ERAT "; isync" : : :"memory");
+}
 
 static void
 mmu_radix_init_amor(void)
@@ -264,6 +402,13 @@ mmu_radix_init_iamr(void)
 	mtspr(SPR_IAMR, (1ul << 62));
 }
 
+static void
+mmu_radix_pid_set(pmap_t pmap)
+{
+	mtspr(SPR_PID, pmap->pm_pid);
+	isync();
+}
+
 /* Quick sort callout for comparing physical addresses. */
 static int
 pa_cmp(const void *a, const void *b)
@@ -281,8 +426,9 @@ pa_cmp(const void *a, const void *b)
 static void
 mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 {
-	vm_paddr_t	kpstart, kpend;
+	vm_paddr_t	kpstart, kpend, l1phys;
 	vm_size_t	physsz, hwphyssz;
+	//uint64_t	l2virt;
 	int		rm_pavail;
 	int		i, j;
 
@@ -371,25 +517,151 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 			phys_avail[i] = phys_avail[i+1] = 0;
 	}
 	physmem = btoc(physsz);	
+
+	bzero(kernel_pmap, sizeof(struct pmap));
+	l1phys = moea64_bootstrap_alloc(RADIX_PGD_SIZE, RADIX_PGD_SIZE);
+	kernel_pmap->pm_pml1 = (pml1_entry_t *)PHYS_TO_DMAP(l1phys);
+	memset(kernel_pmap->pm_pml1, 0, RADIX_PGD_SIZE);
+	printf("kernel_pmap pml1 %p\n", kernel_pmap->pm_pml1);
+	/* XXX only supports 512G */
+#if 0
+	l2phys = moea64_bootstrap_alloc(PAGE_SIZE, PAGE_SIZE);
+	l2virt = (uint64_t *)PHYS_TO_DMAP(l2phys);
+	l2phys |= 
+	kernel_pmap->pm_pml1[0] = 
+#endif
 }
 
 static void
-mmu_radix_parttab_init(vm_paddr_t pdbase)
+mmu_parttab_init(void)
 {
-	uint64_t rts_field;
-	uint64_t field0;
+	vm_paddr_t parttab_phys;
+	uint64_t ptcr;
 
-	/*
-	 * We support 52 bits, hence:
-	 * bits 52 - 31 = 21, 0b10101
-	 * RTS encoding details
-	 * bits 0 - 3 of rts -> bits 6 - 8 unsigned long
-	 * bits 4 - 5 of rts -> bits 62 - 63 of unsigned long
-	 */
-	rts_field = (0x2UL << 61) | (0x5UL << 5);
-	field0 = rts_field | pdbase | 
+	parttab_phys = moea64_bootstrap_alloc(PARTTAB_SIZE, PARTTAB_SIZE);
+	isa3_parttab = (struct pate *)PHYS_TO_DMAP(parttab_phys);
+
+	memset(isa3_parttab, 0, PARTTAB_SIZE);
+	printf("%s parttab: %p\n", __func__, isa3_parttab);
+	ptcr = parttab_phys | (PARTTAB_SIZE_SHIFT-1);
+	printf("setting ptcr %lx\n", ptcr);
+	mtspr(SPR_PTCR, ptcr);
+	printf("set ptcr\n");
+	powernv_set_nmmu_ptcr(ptcr);
+	printf("set nested mmu ptcr\n");
 }
 
+static void
+mmu_parttab_update(uint64_t lpid, uint64_t pagetab, uint64_t proctab)
+{
+	uint64_t prev;
+	
+	printf("%s isa3_parttab %p lpid %lx pagetab %lx proctab %lx\n", __func__, isa3_parttab,
+		   lpid, pagetab, proctab);
+	prev = be64toh(isa3_parttab[lpid].pagetab);
+	printf("%s prev = %lx\n", __func__, prev); 
+	isa3_parttab[lpid].pagetab = htobe64(pagetab);
+	isa3_parttab[lpid].proctab = htobe64(proctab);
+
+	if (prev & PARTTAB_HR) {
+		printf("clear old -- tlbie5\n");
+		__asm __volatile(PPC_TLBIE_5(%0,%1,2,0,1) : :
+			     "r" (TLBIEL_INVAL_SET_LPID), "r" (lpid));
+		__asm __volatile(PPC_TLBIE_5(%0,%1,2,1,1) : :
+			     "r" (TLBIEL_INVAL_SET_LPID), "r" (lpid));
+	} else {
+		printf("%s new value tlbie5\n", __func__);
+		DELAY(10000);
+		__asm __volatile(PPC_TLBIE_5(%0,%1,2,0,0) : :
+			     "r" (TLBIEL_INVAL_SET_LPID), "r" (lpid));
+		printf("%s tlbie5 complete\n", __func__);
+		DELAY(10000);
+	}
+	__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
+	printf("%s done\n", __func__);
+}
+
+static void
+mmu_radix_parttab_init(void)
+{
+	uint64_t pagetab;
+
+	mmu_parttab_init();
+	printf("%s construct pagetab\n", __func__);
+	pagetab = RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1) | \
+		         RADIX_PGD_INDEX_SHIFT | PARTTAB_HR;
+	printf("%s install pagetab %lx\n", __func__, pagetab);
+	mmu_parttab_update(0, pagetab, 0);
+	printf("parttab inited\n");
+}
+
+static void
+mmu_radix_proctab_register(vm_paddr_t proctabpa, uint64_t table_size)
+{
+	uint64_t pagetab, proctab;
+
+	pagetab = be64toh(isa3_parttab[0].pagetab);
+	proctab = proctabpa | table_size | PARTTAB_GR;
+	mmu_parttab_update(0, pagetab, proctab);
+}
+
+#ifdef notyet
+static int pseries_lpar_register_process_table(unsigned long base,
+			unsigned long page_size, unsigned long table_size)
+{
+	long rc;
+	unsigned long flags = 0;
+
+	if (table_size)
+		flags |= PROC_TABLE_NEW;
+	if (radix_enabled())
+		flags |= PROC_TABLE_RADIX | PROC_TABLE_GTSE;
+	else
+		flags |= PROC_TABLE_HPT_SLB;
+	for (;;) {
+		rc = plpar_hcall_norets(H_REGISTER_PROC_TBL, flags, base,
+					page_size, table_size);
+		if (!H_IS_LONG_BUSY(rc))
+			break;
+		mdelay(get_longbusy_msecs(rc));
+	}
+	if (rc != H_SUCCESS)
+		panic("Failed to register process table (rc=%ld)\n", rc);
+	return rc;
+}
+#endif
+
+static void
+mmu_radix_proctab_init(void)
+{
+	uint64_t parttab_size;
+	vm_paddr_t proctabpa;
+
+	/* XXX assume we're running non-virtualized and
+	 * we don't support BHYVE
+	 */
+	if (isa3_pid_bits == 0)
+		isa3_pid_bits = 20;
+	isa3_base_pid = 1;
+
+
+	parttab_size = 1UL << PARTTAB_SIZE_SHIFT;
+	proctabpa = moea64_bootstrap_alloc(parttab_size, parttab_size);
+	isa3_proctab = (void*)PHYS_TO_DMAP(proctabpa);
+	isa3_proctab->proctab0 = htobe64(RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1) | \
+									 RADIX_PGD_INDEX_SHIFT);
+
+	mmu_radix_proctab_register(proctabpa, PROCTAB_SIZE_SHIFT - 12);
+
+	__asm __volatile("ptesync" : : : "memory");
+	__asm __volatile(PPC_TLBIE_5(%0,%1,2,1,1) : :
+		     "r" (TLBIEL_INVAL_SET_LPID), "r" (0));
+	__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
+	printf("process table %p and kernel radix PDE: %p\n",
+		   isa3_proctab, kernel_pmap->pm_pml1);
+	kernel_pmap->pm_pid = isa3_base_pid;
+	isa3_base_pid++;
+}
 
 VISIBILITY void
 METHOD(advise) pmap_t pmap, vm_offset_t start, vm_offset_t end, int advice)
@@ -407,15 +679,24 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 
 	printf("%s\n", __func__);
 	mmu_radix_early_bootstrap(start, end);
-	/* XXX assume we're starting non-virtualized */
-	lpcr = mfspr(SPR_LPCR);
-	mtspr(SPR_LPCR, lpcr | LPCR_UPRT | LPCR_HR);
-	/* XXX init partition table */
-	mmu_radix_init_amor();
-	/* NV end */
+	printf("early bootstrap complete\n");
 
+	if (powernv_enabled) {
+		lpcr = mfspr(SPR_LPCR);
+		mtspr(SPR_LPCR, lpcr | LPCR_UPRT | LPCR_HR);
+		mmu_radix_parttab_init();
+		mmu_radix_init_amor();
+		printf("powernv init complete\n");
+	} else {
+		/* XXX assume we're virtualized - QEMU doesn't support radix on powernv */
+		/* radix_init_pseries() */
+	}
 	mmu_radix_init_iamr();
-	UNIMPLEMENTED();
+	mmu_radix_proctab_init();
+
+	mmu_radix_pid_set(kernel_pmap);
+	/* XXX assume CPU_FTR_HVMODE */
+	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
 }
 
 VISIBILITY void

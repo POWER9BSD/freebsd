@@ -41,6 +41,10 @@
 #include <machine/pcb.h>
 #include <machine/psl.h>
 
+#define PPC_BITLSHIFT(bit)	(sizeof(long)*NBBY - 1 - (bit))
+#define PPC_BIT(bit)		(1UL << PPC_BITLSHIFT(bit))
+#define PPC_BITLSHIFT_VAL(val, bit) ((val) << PPC_BITLSHIFT(bit))
+
 /*
  * CPU Feature Attributes
  *

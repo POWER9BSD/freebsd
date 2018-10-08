@@ -35,6 +35,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/smp.h>
+#include <sys/syslog.h>
 #include <vm/vm.h>
 #include <vm/pmap.h>
 
@@ -469,3 +470,15 @@ static void
 powernv_cpu_idle(sbintime_t sbt)
 {
 }
+
+void
+powernv_set_nmmu_ptcr(uint64_t ptcr)
+{
+	int rc;
+
+	rc = opal_call(OPAL_SET_NMMU_PTCR, -1UL, ptcr);
+	if (rc != OPAL_SUCCESS && rc != OPAL_UNSUPPORTED)
+		log(LOG_WARNING, "%s: failed to set nest mmu ptcr\n", __func__);
+}
+
+
