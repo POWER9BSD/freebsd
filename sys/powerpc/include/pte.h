@@ -70,6 +70,13 @@ struct pate {
 	u_int64_t proctab;
 };
 
+/* Process table entry */
+struct prte {
+	u_int64_t proctab0;
+	u_int64_t proctab1;
+};
+
+
 #endif	/* LOCORE */
 
 /* 32-bit PTE definitions */

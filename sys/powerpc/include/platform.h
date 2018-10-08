@@ -63,5 +63,10 @@ const char *installed_platform(void);
 void platform_probe_and_attach(void);
 
 void platform_sleep(void);
-  
+
+/*
+ * XXX better place for this?
+ */
+extern void powernv_set_nmmu_ptcr(uint64_t ptcr);
+
 #endif	/* _MACHINE_PLATFORM_H_ */

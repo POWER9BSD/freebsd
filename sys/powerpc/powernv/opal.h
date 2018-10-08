@@ -81,6 +81,7 @@ int opal_call(uint64_t token, ...);
 #define	OPAL_INT_EOI			124
 #define	OPAL_INT_SET_MFRR		125
 #define	OPAL_PCI_TCE_KILL		126
+#define	OPAL_SET_NMMU_PTCR		127
 #define	OPAL_XIVE_RESET			128
 #define	OPAL_SENSOR_GROUP_CLEAR		156
 #define	OPAL_SENSOR_READ_U64		162

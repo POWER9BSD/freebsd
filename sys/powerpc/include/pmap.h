@@ -76,6 +76,12 @@
 #include <machine/slb.h>
 #include <machine/tlb.h>
 
+typedef uint64_t pml1_entry_t;
+typedef uint64_t pml2_entry_t;
+typedef uint64_t pml3_entry_t;
+typedef uint64_t pml4_entry_t;
+
+
 struct pmap;
 typedef struct pmap *pmap_t;
 
@@ -133,21 +139,30 @@ RB_PROTOTYPE(pvo_tree, pvo_entry, pvo_plink, pvo_vaddr_compare);
 	((void)((pvo)->pvo_vaddr |= (i)|PVO_PTEGIDX_VALID))
 #define	PVO_VSID(pvo)		((pvo)->pvo_vpn >> 16)
 
-struct	pmap {
-	struct		pmap_statistics	pm_stats;
+struct pmap {
 	struct	mtx	pm_mtx;
 	
-    #ifdef __powerpc64__
-	struct slbtnode	*pm_slb_tree_root;
-	struct slb	**pm_slb;
-	int		pm_slb_len;
-    #else
+#ifdef __powerpc64__
+	union {
+		/* HPT support */
+		struct {
+			struct slbtnode	*pm_slb_tree_root;
+			struct slb	**pm_slb;
+			int		pm_slb_len;
+			struct pvo_tree pmap_pvo;
+			struct pmap	*pmap_phys;
+		};
+		/* Radix support */
+		struct {
+			uint64_t	pm_pid; /* PIDR value */
+			pml1_entry_t	*pm_pml1;	/* KVA of level root page directory */
+		};
+	};
+#else
 	register_t	pm_sr[16];
-    #endif
+#endif
+	struct		pmap_statistics	pm_stats;
 	cpuset_t	pm_active;
-
-	struct pmap	*pmap_phys;
-	struct pvo_tree pmap_pvo;
 };
 
 struct	md_page {
