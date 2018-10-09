@@ -423,10 +423,64 @@ pa_cmp(const void *a, const void *b)
 		return (0);
 }
 
+#define L1PGD_SHIFT 39
+#define L1PGD_PAGES_SHIFT (L1PGD_SHIFT-PAGE_SHIFT)
+#define L1_PAGE_SIZE_SHIFT 30
+#define L1_PAGE_SIZE (1<<L1_PAGE_SIZE_SHIFT)
+
+#define L2PGD_SHIFT 30
+#define L2PGD_PAGES_SHIFT (L2PGD_SHIFT-PAGE_SHIFT)
+#define L2_PAGE_SIZE_SHIFT 21
+#define L2_PAGE_SIZE (1<<L2_PAGE_SIZE_SHIFT)
+
+#define L3PGD_SHIFT 21
+#define L3PGD_PAGES_SHIFT (L3PGD_SHIFT-PAGE_SHIFT)
+
+#define RPTE_SHIFT 9
+#define RPTE_ENTRIES (1<<RPTE_SHIFT)
+
+
+static void
+mmu_radix_dmap_populate(void)
+{
+	u_long l1pages;
+	uint64_t pattr;
+	vm_paddr_t l0phys, pages;
+	vm_ooffset_t off, physsz;
+	pml2_entry_t *l1virt;
+
+	physsz = ctob(physmem);
+	pattr = RPTE_EAA_MASK; /* RWX + privileged */
+	l1pages = ((physmem-1) >> L1PGD_PAGES_SHIFT) + 1;
+
+	bzero(kernel_pmap, sizeof(struct pmap));
+	PMAP_LOCK_INIT(kernel_pmap);
+	CPU_FILL(&kernel_pmap->pm_active);
+
+	l0phys = moea64_bootstrap_alloc(RADIX_PGD_SIZE, RADIX_PGD_SIZE);
+	pages =  moea64_bootstrap_alloc(l1pages << PAGE_SHIFT, PAGE_SIZE);
+	kernel_pmap->pm_pml0 = (pml0_entry_t *)PHYS_TO_DMAP(l0phys);
+	memset(kernel_pmap->pm_pml0, 0, RADIX_PGD_SIZE);
+	off = 0;
+
+	for (int i = 0; i < l1pages; i++, pages += PAGE_SIZE) {
+		kernel_pmap->pm_pml0[i] = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
+		l1virt = (pml2_entry_t *)PHYS_TO_DMAP(pages);
+		memset(l1virt, 0, PAGE_SIZE);
+		for (int j = 0; j < RPTE_ENTRIES; j++) {
+			l1virt[j] = off | RPTE_VALID | RPTE_LEAF | pattr;
+			off += L1_PAGE_SIZE;
+			if ((physsz - off) <= 0)
+				break;
+		}
+	}
+	printf("kernel_pmap pml0 %p\n", kernel_pmap->pm_pml0);
+}
+
 static void
 mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 {
-	vm_paddr_t	kpstart, kpend, l1phys;
+	vm_paddr_t	kpstart, kpend;
 	vm_size_t	physsz, hwphyssz;
 	//uint64_t	l2virt;
 	int		rm_pavail;
@@ -518,18 +572,99 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	}
 	physmem = btoc(physsz);	
 
-	bzero(kernel_pmap, sizeof(struct pmap));
-	l1phys = moea64_bootstrap_alloc(RADIX_PGD_SIZE, RADIX_PGD_SIZE);
-	kernel_pmap->pm_pml1 = (pml1_entry_t *)PHYS_TO_DMAP(l1phys);
-	memset(kernel_pmap->pm_pml1, 0, RADIX_PGD_SIZE);
-	printf("kernel_pmap pml1 %p\n", kernel_pmap->pm_pml1);
-	/* XXX only supports 512G */
-#if 0
-	l2phys = moea64_bootstrap_alloc(PAGE_SIZE, PAGE_SIZE);
-	l2virt = (uint64_t *)PHYS_TO_DMAP(l2phys);
-	l2phys |= 
-	kernel_pmap->pm_pml1[0] = 
+	mmu_radix_dmap_populate();
+}
+
+static void
+mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
+{
+		ihandle_t	mmui;
+	phandle_t	chosen;
+	phandle_t	mmu;
+	ssize_t		sz;
+	int		i;
+	vm_paddr_t	pa;
+	void		*dpcpu;
+#ifdef notyet
+	vm_offset_t va;
 #endif
+
+	/*
+	 * Set up the Open Firmware pmap and add its mappings if not in real
+	 * mode.
+	 */
+	printf("%s enter\n", __func__);
+	chosen = OF_finddevice("/chosen");
+	if (chosen != -1 && OF_getencprop(chosen, "mmu", &mmui, 4) != -1) {
+		mmu = OF_instance_to_package(mmui);
+		if (mmu == -1 ||
+		    (sz = OF_getproplen(mmu, "translations")) == -1)
+			sz = 0;
+		if (sz > 6144 /* tmpstksz - 2 KB headroom */)
+			panic("moea64_bootstrap: too many ofw translations");
+#ifdef notyet
+		if (sz > 0)
+			moea64_add_ofw_mappings(mmup, mmu, sz);
+#else
+		if (sz > 0)
+			panic("too many: %lu ofw mappings\n", sz);
+#endif
+	}
+
+	/*
+	 * Calculate the last available physical address.
+	 */
+	Maxmem = 0;
+	for (i = 0; phys_avail[i + 2] != 0; i += 2)
+		Maxmem = max(Maxmem, powerpc_btop(phys_avail[i + 1]));
+	//	printf("%s set msr\n", __func__);
+	//mtmsr(mfmsr() | PSL_DR | PSL_IR);
+
+	/*
+	 * Set the start and end of kva.
+	 */
+	virtual_avail = VM_MIN_KERNEL_ADDRESS;
+	virtual_end = VM_MAX_SAFE_KERNEL_ADDRESS; 
+#if 0
+	/*
+	 * Remap any early IO mappings (console framebuffer, etc.)
+	 */
+	bs_remap_earlyboot();
+#endif
+	/*
+	 * Allocate a kernel stack with a guard page for thread0 and map it
+	 * into the kernel page map.
+	 */
+	pa = moea64_bootstrap_alloc(kstack_pages * PAGE_SIZE, PAGE_SIZE);
+#if 0
+	va = virtual_avail + KSTACK_GUARD_PAGES * PAGE_SIZE;
+	virtual_avail = va + kstack_pages * PAGE_SIZE;
+	CTR2(KTR_PMAP, "moea64_bootstrap: kstack0 at %#x (%#x)", pa, va);
+	thread0.td_kstack = va;
+	for (i = 0; i < kstack_pages; i++) {
+		moea64_kenter(mmup, va, pa);
+		pa += PAGE_SIZE;
+		va += PAGE_SIZE;
+	}
+#else
+	thread0.td_kstack = PHYS_TO_DMAP(pa);
+#endif
+	thread0.td_kstack_pages = kstack_pages;
+	printf("%s set kstack\n", __func__);
+
+	/*
+	 * Allocate virtual address space for the message buffer.
+	 */
+	pa = msgbuf_phys = moea64_bootstrap_alloc(msgbufsize, PAGE_SIZE);
+	msgbufp = (struct msgbuf *)PHYS_TO_DMAP(pa);
+
+	printf("%s set msgbuf\n", __func__);
+	/*
+	 * Allocate virtual address space for the dynamic percpu area.
+	 */
+	pa = moea64_bootstrap_alloc(DPCPU_SIZE, PAGE_SIZE);
+	dpcpu = (void *)PHYS_TO_DMAP(pa);
+	dpcpu_init(dpcpu, curcpu);
 }
 
 static void
@@ -547,8 +682,11 @@ mmu_parttab_init(void)
 	printf("setting ptcr %lx\n", ptcr);
 	mtspr(SPR_PTCR, ptcr);
 	printf("set ptcr\n");
+#if 0
+	/* functional simulator claims MCE on this */
 	powernv_set_nmmu_ptcr(ptcr);
 	printf("set nested mmu ptcr\n");
+#endif	
 }
 
 static void
@@ -588,7 +726,7 @@ mmu_radix_parttab_init(void)
 
 	mmu_parttab_init();
 	printf("%s construct pagetab\n", __func__);
-	pagetab = RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1) | \
+	pagetab = RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml0) | \
 		         RADIX_PGD_INDEX_SHIFT | PARTTAB_HR;
 	printf("%s install pagetab %lx\n", __func__, pagetab);
 	mmu_parttab_update(0, pagetab, 0);
@@ -604,32 +742,6 @@ mmu_radix_proctab_register(vm_paddr_t proctabpa, uint64_t table_size)
 	proctab = proctabpa | table_size | PARTTAB_GR;
 	mmu_parttab_update(0, pagetab, proctab);
 }
-
-#ifdef notyet
-static int pseries_lpar_register_process_table(unsigned long base,
-			unsigned long page_size, unsigned long table_size)
-{
-	long rc;
-	unsigned long flags = 0;
-
-	if (table_size)
-		flags |= PROC_TABLE_NEW;
-	if (radix_enabled())
-		flags |= PROC_TABLE_RADIX | PROC_TABLE_GTSE;
-	else
-		flags |= PROC_TABLE_HPT_SLB;
-	for (;;) {
-		rc = plpar_hcall_norets(H_REGISTER_PROC_TBL, flags, base,
-					page_size, table_size);
-		if (!H_IS_LONG_BUSY(rc))
-			break;
-		mdelay(get_longbusy_msecs(rc));
-	}
-	if (rc != H_SUCCESS)
-		panic("Failed to register process table (rc=%ld)\n", rc);
-	return rc;
-}
-#endif
 
 static void
 mmu_radix_proctab_init(void)
@@ -648,7 +760,8 @@ mmu_radix_proctab_init(void)
 	parttab_size = 1UL << PARTTAB_SIZE_SHIFT;
 	proctabpa = moea64_bootstrap_alloc(parttab_size, parttab_size);
 	isa3_proctab = (void*)PHYS_TO_DMAP(proctabpa);
-	isa3_proctab->proctab0 = htobe64(RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1) | \
+	memset(isa3_proctab, 0, parttab_size);
+	isa3_proctab->proctab0 = htobe64(RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml0) | \
 									 RADIX_PGD_INDEX_SHIFT);
 
 	mmu_radix_proctab_register(proctabpa, PROCTAB_SIZE_SHIFT - 12);
@@ -658,7 +771,7 @@ mmu_radix_proctab_init(void)
 		     "r" (TLBIEL_INVAL_SET_LPID), "r" (0));
 	__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
 	printf("process table %p and kernel radix PDE: %p\n",
-		   isa3_proctab, kernel_pmap->pm_pml1);
+		   isa3_proctab, kernel_pmap->pm_pml0);
 	kernel_pmap->pm_pid = isa3_base_pid;
 	isa3_base_pid++;
 }
@@ -694,9 +807,17 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	mmu_radix_init_iamr();
 	mmu_radix_proctab_init();
 
+	printf("setting pid\n");
 	mmu_radix_pid_set(kernel_pmap);
+	DELAY(10000);
+	printf("set pid\n");
+	printf("flushing\n");
 	/* XXX assume CPU_FTR_HVMODE */
 	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+	DELAY(10000);
+
+	mmu_radix_late_bootstrap(start, end);
+	printf("%s done\n", __func__);
 }
 
 VISIBILITY void
