@@ -165,10 +165,24 @@ struct pmap {
 	cpuset_t	pm_active;
 };
 
+typedef struct pv_entry {
+	vm_offset_t	pv_va;		/* virtual address for mapping */
+	TAILQ_ENTRY(pv_entry)	pv_next;
+} *pv_entry_t;
+
 struct	md_page {
-	volatile int32_t mdpg_attrs;
-	vm_memattr_t	 mdpg_cache_attrs;
-	struct	pvo_head mdpg_pvoh;
+	union {
+		struct {
+			volatile int32_t mdpg_attrs;
+			vm_memattr_t	 mdpg_cache_attrs;
+			struct	pvo_head mdpg_pvoh;
+		};
+		struct {
+			TAILQ_HEAD(, pv_entry)	pv_list;  /* (p) */
+			int			pv_gen;   /* (p) */
+			vm_memattr_t	md_attr;
+		};
+	};
 };
 
 #define	pmap_page_get_memattr(m)	((m)->md.mdpg_cache_attrs)

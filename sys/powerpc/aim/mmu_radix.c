@@ -463,6 +463,9 @@ mmu_radix_dmap_populate(void)
 	memset(kernel_pmap->pm_pml0, 0, RADIX_PGD_SIZE);
 	off = 0;
 
+	for (int i = 0; i < (RADIX_PGD_SIZE >> PAGE_SHIFT); i++)
+		kernel_pmap->pm_pml0[512+i] = (((l0phys + i*PAGE_SIZE) << 8)| RPTE_VALID | RPTE_SHIFT);
+
 	for (int i = 0; i < l1pages; i++, pages += PAGE_SIZE) {
 		kernel_pmap->pm_pml0[i] = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
 		l1virt = (pml2_entry_t *)PHYS_TO_DMAP(pages);
@@ -904,6 +907,7 @@ METHOD(growkernel) vm_offset_t va)
 {
 
 	CTR2(KTR_PMAP, "%s(%#x)", __func__, va);
+	printf("%s end=%lx\n", __func__, va);
 	UNIMPLEMENTED();
 }
 
@@ -952,13 +956,12 @@ METHOD(ts_referenced) vm_page_t m)
 }
 
 VISIBILITY vm_offset_t
-METHOD(map) vm_offset_t *virt, vm_paddr_t start, vm_paddr_t end, int prot)
+METHOD(map) vm_offset_t *virt __unused, vm_paddr_t start, vm_paddr_t end __unused, int prot __unused)
 {
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %#x, %#x)", __func__, virt, start, end,
 	    prot);
-	UNIMPLEMENTED();
-	return (0);
+	return PHYS_TO_DMAP(start);
 }
 
 VISIBILITY void
@@ -985,7 +988,8 @@ METHOD(page_init) vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
-	UNIMPLEMENTED();	
+	TAILQ_INIT(&m->md.pv_list);
+	m->md.md_attr = VM_MEMATTR_DEFAULT;
 }
 
 VISIBILITY int
