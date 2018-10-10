@@ -235,3 +235,4 @@ device		sound		# Generic sound driver (required)
 device		snd_ai2s	# Apple I2S audio
 device		snd_uaudio	# USB Audio
 
+options		VERBOSE_SYSINIT
