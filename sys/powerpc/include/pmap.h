@@ -80,7 +80,7 @@ typedef uint64_t pml0_entry_t;
 typedef uint64_t pml1_entry_t;
 typedef uint64_t pml2_entry_t;
 typedef uint64_t pml3_entry_t;
-
+typedef uint64_t pt_entry_t;
 
 struct pmap;
 typedef struct pmap *pmap_t;
