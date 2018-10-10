@@ -78,6 +78,14 @@ __FBSDID("$FreeBSD$");
 #include <machine/trap.h>
 #include <machine/mmuvar.h>
 
+/*
+ *
+ */
+static int nkpt = 64;
+SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
+    "Number of kernel page table pages allocated on bootup");
+
+
 #ifndef MMU_DIRECT
 #include "mmu_oea64.h"
 #include "mmu_if.h"
@@ -438,16 +446,92 @@ pa_cmp(const void *a, const void *b)
 
 #define RPTE_SHIFT 9
 #define RPTE_ENTRIES (1<<RPTE_SHIFT)
+#define RPTE_MASK (RPTE_ENTRIES-1)
 
+#define NLB_SHIFT 8
+
+static __inline pt_entry_t *
+vtopdel0(pmap_t pmap, vm_offset_t va)
+{
+	u_long idx;
+
+	idx = (va & ~DMAP_BASE_ADDRESS) >> L1PGD_SHIFT;
+	return (&kernel_pmap->pm_pml0[idx]);
+}
+
+static pt_entry_t *
+vtopdel1(pmap_t pmap, vm_offset_t va)
+{
+	u_long idx;
+	vm_offset_t ptepa;
+	pt_entry_t *pde;
+
+	pde = vtopdel0(pmap, va);
+	if ((*pde & RPTE_VALID) == 0)
+		return (NULL);
+	idx = (va & ~DMAP_BASE_ADDRESS) >> L2PGD_SHIFT;
+	idx &= RPTE_MASK;
+	ptepa = (pde[idx] & ~(RPTE_VALID | RPTE_SHIFT)) >> NLB_SHIFT;
+	return (pt_entry_t *)PHYS_TO_DMAP(ptepa);
+}
+
+static pt_entry_t *
+vtopdel2(pmap_t pmap, vm_offset_t va)
+{
+	u_long idx;
+	vm_offset_t ptepa;
+	pt_entry_t *pde;
+
+	pde = vtopdel1(pmap, va);
+	if ((*pde & RPTE_VALID) == 0)
+		return (NULL);
+	idx = (va & ~DMAP_BASE_ADDRESS) >> L3PGD_SHIFT;
+	idx &= RPTE_MASK;
+	ptepa = (pde[idx] & ~(RPTE_VALID | RPTE_SHIFT)) >> NLB_SHIFT;
+	return (pt_entry_t *)PHYS_TO_DMAP(ptepa);
+}
+
+static pt_entry_t *
+vtopte(pmap_t pmap, vm_offset_t va)
+{
+	u_long idx;
+	vm_offset_t ptepa;
+	pt_entry_t *pde;
+
+	pde = vtopdel2(pmap, va);
+	if ((*pde & RPTE_VALID) == 0)
+		return (NULL);
+	idx = (va & ~DMAP_BASE_ADDRESS) >> PAGE_SHIFT;
+	idx &= RPTE_MASK;
+	ptepa = (pde[idx] & ~(RPTE_VALID | RPTE_SHIFT)) >> NLB_SHIFT;
+	return (pt_entry_t *)PHYS_TO_DMAP(ptepa);
+}
+
+static pt_entry_t *
+kvtopte(vm_offset_t va)
+{
+
+	return (vtopte(kernel_pmap, va));
+}
+
+static __inline void
+mmu_radix_pmap_kenter(vm_offset_t va, vm_paddr_t pa)
+{
+	pt_entry_t *pte;
+
+	pte = kvtopte(va);
+	*pte = pa | RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P;
+}
 
 static void
 mmu_radix_dmap_populate(void)
 {
-	u_long l1pages;
+	u_long l1pages, kptpages;
 	uint64_t pattr;
 	vm_paddr_t l0phys, pages;
 	vm_ooffset_t off, physsz;
-	pml2_entry_t *l1virt;
+	pml1_entry_t *l1virt;
+	pt_entry_t *pte;
 
 	physsz = ctob(physmem);
 	pattr = RPTE_EAA_MASK; /* RWX + privileged */
@@ -463,9 +547,6 @@ mmu_radix_dmap_populate(void)
 	memset(kernel_pmap->pm_pml0, 0, RADIX_PGD_SIZE);
 	off = 0;
 
-	for (int i = 0; i < (RADIX_PGD_SIZE >> PAGE_SHIFT); i++)
-		kernel_pmap->pm_pml0[512+i] = (((l0phys + i*PAGE_SIZE) << 8)| RPTE_VALID | RPTE_SHIFT);
-
 	for (int i = 0; i < l1pages; i++, pages += PAGE_SIZE) {
 		kernel_pmap->pm_pml0[i] = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
 		l1virt = (pml2_entry_t *)PHYS_TO_DMAP(pages);
@@ -477,6 +558,22 @@ mmu_radix_dmap_populate(void)
 				break;
 		}
 	}
+
+	/*
+	 * Create page tables for first 128MB of KVA
+	 */
+	kptpages = /* l1 512GB */1 + /* l2 1GB */1 + /* l3 128MB */nkpt;
+	pages =  moea64_bootstrap_alloc(kptpages << PAGE_SHIFT, PAGE_SIZE);
+	pte = vtopdel0(kernel_pmap, VM_MIN_KERNEL_ADDRESS);
+	*pte = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
+	pages += PAGE_SIZE;
+	pte = vtopdel1(kernel_pmap, VM_MIN_KERNEL_ADDRESS);
+	*pte = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
+	pages += PAGE_SIZE;
+	pte = vtopdel2(kernel_pmap, VM_MIN_KERNEL_ADDRESS);
+	for (int i = 0; i < nkpt; i++, pte++, pages += PAGE_SIZE)
+		*pte = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
+
 	printf("kernel_pmap pml0 %p\n", kernel_pmap->pm_pml0);
 }
 
@@ -504,6 +601,8 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	hwphyssz = 0;
 	TUNABLE_ULONG_FETCH("hw.physmem", (u_long *) &hwphyssz);
 	for (i = 0, j = 0; i < regions_sz; i++, j += 2) {
+		printf("regions[%d].mr_start: %lx regions[%d].mr_size: %lx\n",
+			   i, regions[i].mr_start, i, regions[i].mr_size);
 		CTR3(KTR_PMAP, "region: %#zx - %#zx (%#zx)",
 		    regions[i].mr_start, regions[i].mr_start +
 		    regions[i].mr_size, regions[i].mr_size);
@@ -581,16 +680,14 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 static void
 mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 {
-		ihandle_t	mmui;
+	ihandle_t	mmui;
 	phandle_t	chosen;
 	phandle_t	mmu;
 	ssize_t		sz;
 	int		i;
 	vm_paddr_t	pa;
 	void		*dpcpu;
-#ifdef notyet
 	vm_offset_t va;
-#endif
 
 	/*
 	 * Set up the Open Firmware pmap and add its mappings if not in real
@@ -639,19 +736,15 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	 * into the kernel page map.
 	 */
 	pa = moea64_bootstrap_alloc(kstack_pages * PAGE_SIZE, PAGE_SIZE);
-#if 0
 	va = virtual_avail + KSTACK_GUARD_PAGES * PAGE_SIZE;
 	virtual_avail = va + kstack_pages * PAGE_SIZE;
 	CTR2(KTR_PMAP, "moea64_bootstrap: kstack0 at %#x (%#x)", pa, va);
 	thread0.td_kstack = va;
 	for (i = 0; i < kstack_pages; i++) {
-		moea64_kenter(mmup, va, pa);
+		mmu_radix_pmap_kenter(va, pa);
 		pa += PAGE_SIZE;
 		va += PAGE_SIZE;
 	}
-#else
-	thread0.td_kstack = PHYS_TO_DMAP(pa);
-#endif
 	thread0.td_kstack_pages = kstack_pages;
 	printf("%s set kstack\n", __func__);
 
@@ -905,6 +998,10 @@ METHOD(extract_and_hold) pmap_t pmap, vm_offset_t va, vm_prot_t prot)
 VISIBILITY void
 METHOD(growkernel) vm_offset_t va)
 {
+
+	if (VM_MIN_KERNEL_ADDRESS < va &&
+		va < (VM_MIN_KERNEL_ADDRESS + nkpt*L2_PAGE_SIZE))
+		return;
 
 	CTR2(KTR_PMAP, "%s(%#x)", __func__, va);
 	printf("%s end=%lx\n", __func__, va);
@@ -1203,7 +1300,7 @@ METHOD(kenter) vm_offset_t va, vm_paddr_t pa)
 {
 
 	CTR3(KTR_PMAP, "%s(%#x, %#x)", __func__, va, pa);
-	UNIMPLEMENTED();
+	mmu_radix_pmap_kenter(va, pa);
 }
 
 VISIBILITY void
