@@ -440,6 +440,8 @@ pa_cmp(const void *a, const void *b)
 #define L2PGD_PAGES_SHIFT (L2PGD_SHIFT-PAGE_SHIFT)
 #define L2_PAGE_SIZE_SHIFT 21
 #define L2_PAGE_SIZE (1<<L2_PAGE_SIZE_SHIFT)
+#define L2_PAGE_MASK (L2_PAGE_SIZE-1)
+
 
 #define L3PGD_SHIFT 21
 #define L3PGD_PAGES_SHIFT (L3PGD_SHIFT-PAGE_SHIFT)
@@ -449,6 +451,23 @@ pa_cmp(const void *a, const void *b)
 #define RPTE_MASK (RPTE_ENTRIES-1)
 
 #define NLB_SHIFT 8
+
+#define	pte_store(ptep, pte) do {	   \
+	*(u_long *)(ptep) = (u_long)(pte); \
+} while (0)
+#define	pte_clear(ptep)			pte_store(ptep, 0)
+
+#define	PTESYNC()	__asm __volatile("ptesync");
+#define	TLBSYNC()	__asm __volatile("tlbsync; ptesync");
+#define	SYNC()		__asm __volatile("sync");
+#define	EIEIO()		__asm __volatile("eieio");
+
+
+static __inline void
+TLBIE(uint64_t vpn) {
+	__asm __volatile("tlbie %0" :: "r"(vpn) : "memory");
+	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
+}
 
 static __inline pt_entry_t *
 vtopdel0(pmap_t pmap, vm_offset_t va)
@@ -524,6 +543,16 @@ mmu_radix_pmap_kenter(vm_offset_t va, vm_paddr_t pa)
 }
 
 static void
+pmap_invalidate_range(pmap_t pmap, vm_offset_t start, vm_offset_t end)
+{
+
+	while (start != end) {
+		TLBIE(start);
+		start += PAGE_SIZE;
+	}
+}
+
+static void
 mmu_radix_dmap_populate(void)
 {
 	u_long l1pages, kptpages;
@@ -542,6 +571,9 @@ mmu_radix_dmap_populate(void)
 	CPU_FILL(&kernel_pmap->pm_active);
 
 	l0phys = moea64_bootstrap_alloc(RADIX_PGD_SIZE, RADIX_PGD_SIZE);
+	/* assert alignment */
+	printf("l0phys=%lx\n", l0phys);
+	MPASS((l0phys & (RADIX_PGD_SIZE-1)) == 0);
 	pages =  moea64_bootstrap_alloc(l1pages << PAGE_SHIFT, PAGE_SIZE);
 	kernel_pmap->pm_pml0 = (pml0_entry_t *)PHYS_TO_DMAP(l0phys);
 	memset(kernel_pmap->pm_pml0, 0, RADIX_PGD_SIZE);
@@ -1134,11 +1166,35 @@ METHOD(protect) pmap_t pmap, vm_offset_t start, vm_offset_t end, vm_prot_t prot)
 }
 
 VISIBILITY void
-METHOD(qenter) vm_offset_t start, vm_page_t *m, int count)
+METHOD(qenter) vm_offset_t sva, vm_page_t *ma, int count)
 {
 
-	CTR4(KTR_PMAP, "%s(%#x, %p, %d)", __func__, start, m, count);
-	UNIMPLEMENTED();
+	CTR4(KTR_PMAP, "%s(%#x, %p, %d)", __func__, sva, m, count);
+	pt_entry_t *endpte, oldpte, pa, *pte;
+	vm_page_t m;
+	uint64_t cache_bits, attr_bits;
+
+	oldpte = 0;
+	pte = kvtopte(sva);
+	endpte = pte + count;
+	cache_bits = 0;
+	attr_bits = RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P;
+	while (pte < endpte) {
+		m = *ma++;
+#if 0
+		cache_bits = pmap_cache_bits(kernel_pmap, m->md.pat_mode, 0);
+#endif	
+		pa = VM_PAGE_TO_PHYS(m) | cache_bits | attr_bits;
+		if (*pte != pa) {
+			oldpte |= *pte;
+			pte_store(pte, pa);
+		}
+		pte++;
+	}
+
+	if (__predict_false((oldpte & RPTE_VALID) != 0))
+		pmap_invalidate_range(kernel_pmap, sva, sva + count *
+		    PAGE_SIZE);
 }
 
 VISIBILITY void
@@ -1200,9 +1256,11 @@ METHOD(unwire) pmap_t pmap, vm_offset_t start, vm_offset_t end)
 VISIBILITY void
 METHOD(zero_page) vm_page_t m)
 {
+	void *addr;
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
-	UNIMPLEMENTED();
+	addr = (void*)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(m));
+	memset(addr, 0, PAGE_SIZE);
 }
 
 VISIBILITY void
@@ -1249,7 +1307,20 @@ METHOD(align_superpage) vm_object_t object, vm_ooffset_t offset,
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %p, %#x)", __func__, object, offset, addr,
 	    size);
-	UNIMPLEMENTED();
+	vm_offset_t superpage_offset;
+
+	if (size < L2_PAGE_SIZE)
+		return;
+	if (object != NULL && (object->flags & OBJ_COLORED) != 0)
+		offset += ptoa(object->pg_color);
+	superpage_offset = offset & L2_PAGE_MASK;
+	if (size - ((L2_PAGE_SIZE - superpage_offset) & L2_PAGE_MASK) < L2_PAGE_SIZE ||
+	    (*addr & L2_PAGE_MASK) == superpage_offset)
+		return;
+	if ((*addr & L2_PAGE_MASK) < superpage_offset)
+		*addr = (*addr & ~L2_PAGE_MASK) + superpage_offset;
+	else
+		*addr = ((*addr + L2_PAGE_MASK) & ~L2_PAGE_MASK) + superpage_offset;
 }
 
 VISIBILITY void *
