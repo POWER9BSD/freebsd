@@ -322,6 +322,55 @@ enum {
 };
 
 /*
+ * Data for the pv entry allocation mechanism.
+ * Updates to pv_invl_gen are protected by the pv_list_locks[]
+ * elements, but reads are not.
+ */
+static TAILQ_HEAD(pch, pv_chunk) pv_chunks = TAILQ_HEAD_INITIALIZER(pv_chunks);
+static struct mtx __exclusive_cache_line pv_chunks_mutex;
+static struct rwlock __exclusive_cache_line pv_list_locks[NPV_LIST_LOCKS];
+static u_long pv_invl_gen[NPV_LIST_LOCKS];
+static struct md_page *pv_table;
+static struct md_page pv_dummy;
+
+
+#define	pa_index(pa)	((pa) >> PDRSHIFT)
+#define	pa_to_pvh(pa)	(&pv_table[pa_index(pa)])
+
+#define	NPV_LIST_LOCKS	MAXCPU
+
+#define	PHYS_TO_PV_LIST_LOCK(pa)	\
+			(&pv_list_locks[pa_index(pa) % NPV_LIST_LOCKS])
+
+#define	CHANGE_PV_LIST_LOCK_TO_PHYS(lockp, pa)	do {	\
+	struct rwlock **_lockp = (lockp);		\
+	struct rwlock *_new_lock;			\
+							\
+	_new_lock = PHYS_TO_PV_LIST_LOCK(pa);		\
+	if (_new_lock != *_lockp) {			\
+		if (*_lockp != NULL)			\
+			rw_wunlock(*_lockp);		\
+		*_lockp = _new_lock;			\
+		rw_wlock(*_lockp);			\
+	}						\
+} while (0)
+
+#define	CHANGE_PV_LIST_LOCK_TO_VM_PAGE(lockp, m)	\
+			CHANGE_PV_LIST_LOCK_TO_PHYS(lockp, VM_PAGE_TO_PHYS(m))
+
+#define	RELEASE_PV_LIST_LOCK(lockp)		do {	\
+	struct rwlock **_lockp = (lockp);		\
+							\
+	if (*_lockp != NULL) {				\
+		rw_wunlock(*_lockp);			\
+		*_lockp = NULL;				\
+	}						\
+} while (0)
+
+#define	VM_PAGE_TO_PV_LIST_LOCK(m)	\
+			PHYS_TO_PV_LIST_LOCK(VM_PAGE_TO_PHYS(m))
+
+/*
  * We support 52 bits, hence:
  * bits 52 - 31 = 21, 0b10101
  * RTS encoding details
@@ -431,6 +480,10 @@ pa_cmp(const void *a, const void *b)
 		return (0);
 }
 
+#define L0_PAGE_SIZE_SHIFT 39
+#define L0_PAGE_SIZE (1<<L0_PAGE_SIZE_SHIFT)
+#define L0_PAGE_MASK (L0_PAGE_SIZE-1)
+
 #define L1PGD_SHIFT 39
 #define L1PGD_PAGES_SHIFT (L1PGD_SHIFT-PAGE_SHIFT)
 #define L1_PAGE_SIZE_SHIFT 30
@@ -447,11 +500,15 @@ pa_cmp(const void *a, const void *b)
 #define L3PGD_PAGES_SHIFT (L3PGD_SHIFT-PAGE_SHIFT)
 
 #define RPTE_SHIFT 9
+#define NLS_MASK ((1<<5)-1)
 #define RPTE_ENTRIES (1<<RPTE_SHIFT)
 #define RPTE_MASK (RPTE_ENTRIES-1)
 
 #define NLB_SHIFT 8
+#define NLB_MASK (((1<<52)-1) << NLB_SHIFT)
 
+#define	pte_load_store(ptep, pte)	atomic_swap_long(ptep, pte)
+#define	pte_load_clear(ptep)		atomic_swap_long(ptep, 0)	
 #define	pte_store(ptep, pte) do {	   \
 	*(u_long *)(ptep) = (u_long)(pte); \
 } while (0)
@@ -462,6 +519,13 @@ pa_cmp(const void *a, const void *b)
 #define	SYNC()		__asm __volatile("sync");
 #define	EIEIO()		__asm __volatile("eieio");
 
+#define PG_W	RPTE_WIRED
+#define PG_V	RPTE_VALID
+#define PG_MANAGED	RPTE_MANAGED
+#define PG_M	RPTE_C
+#define PG_A	RPTE_R
+#define PG_RW	RPTE_EAA_R| RPTE_EAA_W
+#define PG_PS	RPTE_LEAF
 
 static __inline void
 TLBIE(uint64_t vpn) {
@@ -469,13 +533,75 @@ TLBIE(uint64_t vpn) {
 	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
 }
 
-static __inline pt_entry_t *
-vtopdel0(pmap_t pmap, vm_offset_t va)
+/* Return various clipped indexes for a given VA */
+static __inline vm_pindex_t
+pmap_pte_index(vm_offset_t va)
 {
-	u_long idx;
 
-	idx = (va & ~DMAP_BASE_ADDRESS) >> L1PGD_SHIFT;
-	return (&kernel_pmap->pm_pml0[idx]);
+	return ((va >> PAGE_SHIFT) & RPTE_MASK)
+}
+
+static __inline vm_pindex_t
+pmap_pml2e_index(vm_offset_t va)
+{
+
+	return ((va >> L2_PAGE_SIZE_SHIFT) & RPTE_MASK);
+}
+
+static __inline vm_pindex_t
+pmap_pml1e_index(vm_offset_t va)
+{
+
+	return ((va >> L1_PAGE_SIZE_SHIFT) & RPTE_MASK);
+}
+
+static __inline vm_pindex_t
+pmap_pml0e_index(vm_offset_t va)
+{
+
+	return ((va & PG_FRAME) >> L0_PAGE_SIZE_SHIFT);
+}
+
+/* Return a pointer to the PT slot that corresponds to a VA */
+static __inline pt_entry_t *
+pmap_l2e_to_pte(pt_entry_t *l2e, vm_offset_t va)
+{
+	pt_entry_t *pte;
+
+	ptepa = (*l2e & ~NLB_MASK) >> NLB_SHIFT;
+	pte = (pt_entry_t *)PHYS_TO_DMAP(ptepa);
+	return (&pte[pmap_pte_index(va)]);
+}
+
+/* Return a pointer to the PD slot that corresponds to a VA */
+static __inline pt_entry_t *
+pmap_l1e_to_l2e(pt_entry_t *l1e, vm_offset_t va)
+{
+	pt_entry_t *l2e;
+	vm_paddr_t l2pa;
+
+	l2pa = (*l1e & ~NLB_MASK) >> NLB_SHIFT;
+	l2e = (pd_entry_t *)PHYS_TO_DMAP(l2pa);
+	return (&l2e[pmap_pml2e_index(va)]);
+}
+
+/* Return a pointer to the PD slot that corresponds to a VA */
+static __inline pt_entry_t *
+pmap_l0e_to_l1e(pt_entry_t *l0e, vm_offset_t va)
+{
+	pt_entry_t *l1e;
+	vm_paddr_t l1pa;
+
+	l1pa = (*l1e & ~NLB_MASK) >> NLB_SHIFT;
+	l1e = (pd_entry_t *)PHYS_TO_DMAP(l1pa);
+	return (&l1e[pmap_pml1e_index(va)]);
+}
+
+static __inline pml4_entry_t *
+pmap_pml0e(pmap_t pmap, vm_offset_t va)
+{
+
+	return (&pmap->pm_pml0[pmap_pml0e_index(va)]);
 }
 
 static pt_entry_t *
@@ -485,12 +611,12 @@ vtopdel1(pmap_t pmap, vm_offset_t va)
 	vm_offset_t ptepa;
 	pt_entry_t *pde;
 
-	pde = vtopdel0(pmap, va);
+	pde = pmap_pml0e(pmap, va);
 	if ((*pde & RPTE_VALID) == 0)
 		return (NULL);
-	idx = (va & ~DMAP_BASE_ADDRESS) >> L2PGD_SHIFT;
+	idx = (va & PG_FRAME) >> L2PGD_SHIFT;
 	idx &= RPTE_MASK;
-	ptepa = (pde[idx] & ~(RPTE_VALID | RPTE_SHIFT)) >> NLB_SHIFT;
+	ptepa = (pde[idx] & NLB_MASK) >> NLB_SHIFT;
 	return (pt_entry_t *)PHYS_TO_DMAP(ptepa);
 }
 
@@ -504,9 +630,9 @@ vtopdel2(pmap_t pmap, vm_offset_t va)
 	pde = vtopdel1(pmap, va);
 	if ((*pde & RPTE_VALID) == 0)
 		return (NULL);
-	idx = (va & ~DMAP_BASE_ADDRESS) >> L3PGD_SHIFT;
+	idx = (va & PG_FRAME) >> L3PGD_SHIFT;
 	idx &= RPTE_MASK;
-	ptepa = (pde[idx] & ~(RPTE_VALID | RPTE_SHIFT)) >> NLB_SHIFT;
+	ptepa = (pde[idx] & NLB_MASK) >> NLB_SHIFT;
 	return (pt_entry_t *)PHYS_TO_DMAP(ptepa);
 }
 
@@ -520,9 +646,9 @@ vtopte(pmap_t pmap, vm_offset_t va)
 	pde = vtopdel2(pmap, va);
 	if ((*pde & RPTE_VALID) == 0)
 		return (NULL);
-	idx = (va & ~DMAP_BASE_ADDRESS) >> PAGE_SHIFT;
+	idx = (va & PG_FRAME) >> PAGE_SHIFT;
 	idx &= RPTE_MASK;
-	ptepa = (pde[idx] & ~(RPTE_VALID | RPTE_SHIFT)) >> NLB_SHIFT;
+	ptepa = (pde[idx] & PG_FRAME);
 	return (pt_entry_t *)PHYS_TO_DMAP(ptepa);
 }
 
@@ -542,6 +668,14 @@ mmu_radix_pmap_kenter(vm_offset_t va, vm_paddr_t pa)
 	*pte = pa | RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P;
 }
 
+static
+
+static void
+pmap_invalidate_page(pmap_t pmap, vm_offset_t start)
+{
+	TLBIE(start);
+}
+
 static void
 pmap_invalidate_range(pmap_t pmap, vm_offset_t start, vm_offset_t end)
 {
@@ -551,6 +685,108 @@ pmap_invalidate_range(pmap_t pmap, vm_offset_t start, vm_offset_t end)
 		start += PAGE_SIZE;
 	}
 }
+
+
+static __inline struct pv_chunk *
+pv_to_chunk(pv_entry_t pv)
+{
+
+	return ((struct pv_chunk *)((uintptr_t)pv & ~(uintptr_t)PAGE_MASK));
+}
+
+#define PV_PMAP(pv) (pv_to_chunk(pv)->pc_pmap)
+
+#define	PC_FREE0	0xfffffffffffffffful
+#define	PC_FREE1	0xfffffffffffffffful
+#define	PC_FREE2	0x000000fffffffffful
+
+static const uint64_t pc_freemask[_NPCM] = { PC_FREE0, PC_FREE1, PC_FREE2 };
+
+/*
+ * First find and then remove the pv entry for the specified pmap and virtual
+ * address from the specified pv list.  Returns the pv entry if found and NULL
+ * otherwise.  This operation can be performed on pv lists for either 4KB or
+ * 2MB page mappings.
+ */
+static __inline pv_entry_t
+pmap_pvh_remove(struct md_page *pvh, pmap_t pmap, vm_offset_t va)
+{
+	pv_entry_t pv;
+
+	TAILQ_FOREACH(pv, &pvh->pv_list, pv_next) {
+		if (pmap == PV_PMAP(pv) && va == pv->pv_va) {
+			TAILQ_REMOVE(&pvh->pv_list, pv, pv_next);
+			pvh->pv_gen++;
+			break;
+		}
+	}
+	return (pv);
+}
+
+static void
+free_pv_chunk(struct pv_chunk *pc)
+{
+	vm_page_t m;
+
+	mtx_lock(&pv_chunks_mutex);
+ 	TAILQ_REMOVE(&pv_chunks, pc, pc_lru);
+	mtx_unlock(&pv_chunks_mutex);
+	PV_STAT(atomic_subtract_int(&pv_entry_spare, _NPCPV));
+	PV_STAT(atomic_subtract_int(&pc_chunk_count, 1));
+	PV_STAT(atomic_add_int(&pc_chunk_frees, 1));
+	/* entire chunk is free, return it */
+	m = PHYS_TO_VM_PAGE(DMAP_TO_PHYS((vm_offset_t)pc));
+	dump_drop_page(m->phys_addr);
+	vm_page_unwire(m, PQ_NONE);
+	vm_page_free(m);
+}
+
+/*
+ * free the pv_entry back to the free list
+ */
+static void
+free_pv_entry(pmap_t pmap, pv_entry_t pv)
+{
+	struct pv_chunk *pc;
+	int idx, field, bit;
+
+	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
+	PV_STAT(atomic_add_long(&pv_entry_frees, 1));
+	PV_STAT(atomic_add_int(&pv_entry_spare, 1));
+	PV_STAT(atomic_subtract_long(&pv_entry_count, 1));
+	pc = pv_to_chunk(pv);
+	idx = pv - &pc->pc_pventry[0];
+	field = idx / 64;
+	bit = idx % 64;
+	pc->pc_map[field] |= 1ul << bit;
+	if (pc->pc_map[0] != PC_FREE0 || pc->pc_map[1] != PC_FREE1 ||
+	    pc->pc_map[2] != PC_FREE2) {
+		/* 98% of the time, pc is already at the head of the list. */
+		if (__predict_false(pc != TAILQ_FIRST(&pmap->pm_pvchunk))) {
+			TAILQ_REMOVE(&pmap->pm_pvchunk, pc, pc_list);
+			TAILQ_INSERT_HEAD(&pmap->pm_pvchunk, pc, pc_list);
+		}
+		return;
+	}
+	TAILQ_REMOVE(&pmap->pm_pvchunk, pc, pc_list);
+	free_pv_chunk(pc);
+}
+
+/*
+ * First find and then destroy the pv entry for the specified pmap and virtual
+ * address.  This operation can be performed on pv lists for either 4KB or 2MB
+ * page mappings.
+ */
+static void
+pmap_pvh_free(struct md_page *pvh, pmap_t pmap, vm_offset_t va)
+{
+	pv_entry_t pv;
+
+	pv = pmap_pvh_remove(pvh, pmap, va);
+	KASSERT(pv != NULL, ("pmap_pvh_free: pv not found"));
+	free_pv_entry(pmap, pv);
+}
+
 
 static void
 mmu_radix_dmap_populate(void)
@@ -1159,10 +1395,141 @@ METHOD(pinit0) pmap_t pmap)
 VISIBILITY void
 METHOD(protect) pmap_t pmap, vm_offset_t start, vm_offset_t end, vm_prot_t prot)
 {
+	vm_offset_t va_next;
+	pml4_entry_t *pml0e;
+	pdp_entry_t *l1e;
+	pd_entry_t ptpaddr, *l2e;
+	pt_entry_t *pte;
+	boolean_t anychanged;
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %#x, %#x)", __func__, pmap, start, end,
 	    prot);
-	UNIMPLEMENTED();
+
+	KASSERT((prot & ~VM_PROT_ALL) == 0, ("invalid prot %x", prot));
+	if (prot == VM_PROT_NONE) {
+		pmap_remove(pmap, sva, eva);
+		return;
+	}
+
+	if ((prot & (VM_PROT_WRITE|VM_PROT_EXECUTE)) ==
+	    (VM_PROT_WRITE|VM_PROT_EXECUTE))
+		return;
+
+	anychanged = FALSE;
+
+	/*
+	 * Although this function delays and batches the invalidation
+	 * of stale TLB entries, it does not need to call
+	 * pmap_delayed_invl_started() and
+	 * pmap_delayed_invl_finished(), because it does not
+	 * ordinarily destroy mappings.  Stale TLB entries from
+	 * protection-only changes need only be invalidated before the
+	 * pmap lock is released, because protection-only changes do
+	 * not destroy PV entries.  Even operations that iterate over
+	 * a physical page's PV list of mappings, like
+	 * pmap_remove_write(), acquire the pmap lock for each
+	 * mapping.  Consequently, for protection-only changes, the
+	 * pmap lock suffices to synchronize both page table and TLB
+	 * updates.
+	 *
+	 * This function only destroys a mapping if pmap_demote_pde()
+	 * fails.  In that case, stale TLB entries are immediately
+	 * invalidated.
+	 */
+	
+	PMAP_LOCK(pmap);
+	for (; sva < eva; sva = va_next) {
+
+		pml0e = pmap_pml0e(pmap, sva);
+		if ((*pml0e & PG_V) == 0) {
+			va_next = (sva + LO_PAGE_SIZE) & ~L0_PAGE_MASK;
+			if (va_next < sva)
+				va_next = eva;
+			continue;
+		}
+
+		l1e = pmap_l0e_to_l1e(pml0e, sva);
+		if ((*l1e & PG_V) == 0) {
+			va_next = (sva + L1_PAGE_SIZE) & ~L1_PAGE_MASK;
+			if (va_next < sva)
+				va_next = eva;
+			continue;
+		}
+
+		va_next = (sva + L2_PAGE_SIZE) & ~L2_PAGE_MASK;
+		if (va_next < sva)
+			va_next = eva;
+
+		l2e = pmap_l1e_to_l2e(l1e, sva);
+		ptpaddr = *l2e;
+
+		/*
+		 * Weed out invalid mappings.
+		 */
+		if (ptpaddr == 0)
+			continue;
+
+		/*
+		 * Check for large page.
+		 */
+		if ((ptpaddr & PG_PS) != 0) {
+			/*
+			 * Are we protecting the entire large page?  If not,
+			 * demote the mapping and fall through.
+			 */
+			if (sva + NBPDR == va_next && eva >= va_next) {
+				/*
+				 * The TLB entry for a PG_G mapping is
+				 * invalidated by pmap_protect_pde().
+				 */
+				if (pmap_protect_pde(pmap, pde, sva, prot))
+					anychanged = TRUE;
+				continue;
+			} else if (!pmap_demote_pde(pmap, pde, sva)) {
+				/*
+				 * The large page mapping was destroyed.
+				 */
+				continue;
+			}
+		}
+
+		if (va_next > eva)
+			va_next = eva;
+
+		for (pte = pmap_l2e_to_pte(l2e, sva); sva != va_next; pte++,
+		    sva += PAGE_SIZE) {
+			pt_entry_t obits, pbits;
+			vm_page_t m;
+
+retry:
+			obits = pbits = *pte;
+			if ((pbits & PG_V) == 0)
+				continue;
+
+			if ((prot & VM_PROT_WRITE) == 0) {
+				if ((pbits & (PG_MANAGED | PG_M | PG_RW)) ==
+				    (PG_MANAGED | PG_M | PG_RW)) {
+					m = PHYS_TO_VM_PAGE(pbits & PG_FRAME);
+					vm_page_dirty(m);
+				}
+				pbits &= ~(PG_RW | PG_M);
+			}
+			if (prot & VM_PROT_EXECUTE)
+				pbits |= PG_X;
+
+			if (pbits != obits) {
+				if (!atomic_cmpset_long(pte, obits, pbits))
+					goto retry;
+				if (obits & PG_G)
+					pmap_invalidate_page(pmap, sva);
+				else
+					anychanged = TRUE;
+			}
+		}
+	}
+	if (anychanged)
+		pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
 }
 
 VISIBILITY void
@@ -1213,12 +1580,202 @@ METHOD(release) pmap_t pmap)
 	UNIMPLEMENTED();
 }
 
+static void
+pmap_delayed_invl_started(void)
+{
+	/* XXX */
+}
+
+static void
+pmap_delayed_invl_finished(void)
+{
+	/* XXX */
+}
+
+static void
+pmap_delayed_invl_page(vm_page_t m)
+{
+	/* XXX */
+}
+
+/*
+ * pmap_remove_pte: do the things to unmap a page in a process
+ */
+static int
+pmap_remove_pte(pmap_t pmap, pt_entry_t *ptq, vm_offset_t va, 
+    pd_entry_t ptepde, struct spglist *free, struct rwlock **lockp)
+{
+	struct md_page *pvh;
+	pt_entry_t oldpte;
+	vm_page_t m;
+
+	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
+	oldpte = pte_load_clear(ptq);
+	if (oldpte & RPTE_WIRED)
+		pmap->pm_stats.wired_count -= 1;
+	pmap_resident_count_dec(pmap, 1);
+	if (oldpte & RPTE_MANAGED) {
+		m = PHYS_TO_VM_PAGE(oldpte & PG_FRAME);
+		if ((oldpte & (PG_M | PG_RW)) == (PG_M | PG_RW))
+			vm_page_dirty(m);
+		if (oldpte & PG_A)
+			vm_page_aflag_set(m, PGA_REFERENCED);
+		CHANGE_PV_LIST_LOCK_TO_VM_PAGE(lockp, m);
+		pmap_pvh_free(&m->md, pmap, va);
+		if (TAILQ_EMPTY(&m->md.pv_list) &&
+		    (m->flags & PG_FICTITIOUS) == 0) {
+			pvh = pa_to_pvh(VM_PAGE_TO_PHYS(m));
+			if (TAILQ_EMPTY(&pvh->pv_list))
+				vm_page_aflag_clear(m, PGA_WRITEABLE);
+		}
+		pmap_delayed_invl_page(m);
+	}
+	return (pmap_unuse_pt(pmap, va, ptepde, free));
+}
+
+/*
+ * Remove a single page from a process address space
+ */
+static void
+pmap_remove_page(pmap_t pmap, vm_offset_t va, pd_entry_t *pde,
+    struct spglist *free)
+{
+	struct rwlock *lock;
+	pt_entry_t *pte;
+
+	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
+	if ((*pde & RPTE_VALID) == 0)
+		return;
+	pte = pmap_pde_to_pte(pde, va);
+	if ((*pte & RPTE_VALID) == 0)
+		return;
+	lock = NULL;
+	pmap_remove_pte(pmap, pte, va, *pde, free, &lock);
+	if (lock != NULL)
+		rw_wunlock(lock);
+	pmap_invalidate_page(pmap, va);
+}
+
 VISIBILITY void
 METHOD(remove) pmap_t pmap, vm_offset_t start, vm_offset_t end)
 {
+	struct rwlock *lock;
+	vm_offset_t va_next;
+	pml0_entry_t *pml0e;
+	pdp_entry_t *pdpe;
+	pd_entry_t ptpaddr, *pde;
+	struct spglist free;
+	int anyvalid;
 
 	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, pmap, start, end);
-	UNIMPLEMENTED();
+
+	/*
+	 * Perform an unsynchronized read.  This is, however, safe.
+	 */
+	if (pmap->pm_stats.resident_count == 0)
+		return;
+
+	anyvalid = 0;
+	SLIST_INIT(&free);
+
+	pmap_delayed_invl_started();
+	PMAP_LOCK(pmap);
+
+	/*
+	 * special handling of removing one page.  a very
+	 * common operation and easy to short circuit some
+	 * code.
+	 */
+	if (sva + PAGE_SIZE == eva) {
+		pde = pmap_pde(pmap, sva);
+		if (pde && (*pde & PG_PS) == 0) {
+			pmap_remove_page(pmap, sva, pde, &free);
+			goto out;
+		}
+	}
+
+	lock = NULL;
+	for (; sva < eva; sva = va_next) {
+
+		if (pmap->pm_stats.resident_count == 0)
+			break;
+
+		pml0e = pmap_pml0e(pmap, sva);
+		if ((*pml0e & PG_V) == 0) {
+			va_next = (sva + L0_PAGE_SIZE) & ~L0_PAGE_MASK;
+			if (va_next < sva)
+				va_next = eva;
+			continue;
+		}
+
+		pml1e = pmap_l0e_to_l1e(pml1e, sva);
+		if ((*pml1e & PG_V) == 0) {
+			va_next = (sva + L1_PAGE_SIZE) & ~L1_PAGE_MASK;
+			if (va_next < sva)
+				va_next = eva;
+			continue;
+		}
+
+		/*
+		 * Calculate index for next page table.
+		 */
+		va_next = (sva + L2_PAGE_SIZE) & ~L2_PAGE_MASK
+		if (va_next < sva)
+			va_next = eva;
+
+		pml2e = pmap_1e_to_l2e(pdpe, sva);
+		ptpaddr = *pml2e;
+
+		/*
+		 * Weed out invalid mappings.
+		 */
+		if (ptpaddr == 0)
+			continue;
+
+		/*
+		 * Check for large page.
+		 */
+		if ((ptpaddr & PG_PS) != 0) {
+			/*
+			 * Are we removing the entire large page?  If not,
+			 * demote the mapping and fall through.
+			 */
+			if (sva + L2_PAGE_SIZE == va_next && eva >= va_next) {
+				/*
+				 * The TLB entry for a PG_G mapping is
+				 * invalidated by pmap_remove_pde().
+				 */
+				if ((ptpaddr & PG_G) == 0)
+					anyvalid = 1;
+				pmap_remove_l2e(pmap, pde, sva, &free, &lock);
+				continue;
+			} else if (!pmap_demote_l2e_locked(pmap, pde, sva,
+			    &lock)) {
+				/* The large page mapping was destroyed. */
+				continue;
+			} else
+				ptpaddr = *pde;
+		}
+
+		/*
+		 * Limit our scan to either the end of the va represented
+		 * by the current page table page, or to the end of the
+		 * range being removed.
+		 */
+		if (va_next > eva)
+			va_next = eva;
+
+		if (pmap_remove_ptes(pmap, sva, va_next, pml2e, &free, &lock))
+			anyvalid = 1;
+	}
+	if (lock != NULL)
+		rw_wunlock(lock);
+out:
+	if (anyvalid)
+		pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
+	pmap_delayed_invl_finished();
+	vm_page_free_pages_toq(&free, true);
 }
 
 VISIBILITY void
