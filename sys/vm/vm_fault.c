@@ -270,8 +270,8 @@ vm_fault_soft_fast(struct faultstate *fs, vm_offset_t vaddr, vm_prot_t prot,
     int fault_type, int fault_flags, boolean_t wired, vm_page_t *m_hold)
 {
 	vm_page_t m, m_map;
-#if (defined(__aarch64__) || defined(__amd64__) || (defined(__arm__) && \
-    __ARM_ARCH >= 6) || defined(__i386__)) && VM_NRESERVLEVEL > 0
+#if (defined(__aarch64__) || defined(__amd64__) || defined(__powerpc64__) || \
+	(defined(__arm__) &&  __ARM_ARCH >= 6) || defined(__i386__)) && VM_NRESERVLEVEL > 0
 	vm_page_t m_super;
 	int flags;
 #endif
@@ -285,8 +285,8 @@ vm_fault_soft_fast(struct faultstate *fs, vm_offset_t vaddr, vm_prot_t prot,
 		return (KERN_FAILURE);
 	m_map = m;
 	psind = 0;
-#if (defined(__aarch64__) || defined(__amd64__) || (defined(__arm__) && \
-    __ARM_ARCH >= 6) || defined(__i386__)) && VM_NRESERVLEVEL > 0
+#if (defined(__aarch64__) || defined(__amd64__) || defined(__powerpc64__) || \
+	(defined(__arm__) &&  __ARM_ARCH >= 6) || defined(__i386__)) && VM_NRESERVLEVEL > 0
 	if ((m->flags & PG_FICTITIOUS) == 0 &&
 	    (m_super = vm_reserv_to_superpage(m)) != NULL &&
 	    rounddown2(vaddr, pagesizes[m_super->psind]) >= fs->entry->start &&

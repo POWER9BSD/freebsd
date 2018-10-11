@@ -174,6 +174,7 @@ struct pmap {
 			pml1_entry_t	*pm_pml1;	/* KVA of root page directory */
 			struct vm_radix		pm_root;	/* spare page table pages */
 			TAILQ_HEAD(,pv_chunk)	pm_pvchunk;	/* list of mappings in pmap */
+			int pm_flags;
 		};
 	};
 #else
@@ -336,6 +337,7 @@ void		pmap_deactivate(struct thread *);
 vm_paddr_t	pmap_kextract(vm_offset_t);
 int		pmap_dev_direct_mapped(vm_paddr_t, vm_size_t);
 boolean_t	pmap_mmu_install(char *name, int prio);
+bool		pmap_ps_enabled(pmap_t pmap);
 
 #define	vtophys(va)	pmap_kextract((vm_offset_t)(va))
 
