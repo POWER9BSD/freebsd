@@ -628,7 +628,7 @@ vm_page_startup(vm_offset_t vaddr)
 #endif
 
 #if defined(__aarch64__) || defined(__amd64__) || defined(__arm__) || \
-    defined(__i386__) || defined(__mips__)
+    defined(__i386__) || defined(__mips__) || defined(__powerpc64__)
 	/*
 	 * Allocate a bitmap to indicate that a random physical page
 	 * needs to be included in a minidump.

@@ -75,11 +75,27 @@
 #include <machine/pte.h>
 #include <machine/slb.h>
 #include <machine/tlb.h>
+#ifdef __powerpc64__
+#include <vm/vm_radix.h>
+#endif
 
-typedef uint64_t pml0_entry_t;
+
+/*
+ * The radix page table structure is described by levels 1-4.
+ * See Fig 33. on p. 1002 of Power ISA v3.0B
+ *
+ * Page directories and tables must be size aligned.
+ */
+
+/* Root page directory - 64k   -- each entry covers 512GB */
 typedef uint64_t pml1_entry_t;
+/* l2 page directory - 4k      -- each entry covers 1GB */
 typedef uint64_t pml2_entry_t;
+/* l3 page directory - 4k      -- each entry covers 2MB */
 typedef uint64_t pml3_entry_t;
+/* l4 page directory - 256B/4k -- each entry covers 64k/4k */
+typedef uint64_t pml4_entry_t;
+
 typedef uint64_t pt_entry_t;
 
 struct pmap;
@@ -141,7 +157,7 @@ RB_PROTOTYPE(pvo_tree, pvo_entry, pvo_plink, pvo_vaddr_compare);
 
 struct pmap {
 	struct	mtx	pm_mtx;
-	
+	uint8_t pm_pad[CACHE_LINE_SIZE-sizeof(struct mtx)];
 #ifdef __powerpc64__
 	union {
 		/* HPT support */
@@ -155,7 +171,9 @@ struct pmap {
 		/* Radix support */
 		struct {
 			uint64_t	pm_pid; /* PIDR value */
-			pml0_entry_t	*pm_pml0;	/* KVA of root page directory */
+			pml1_entry_t	*pm_pml1;	/* KVA of root page directory */
+			struct vm_radix		pm_root;	/* spare page table pages */
+			TAILQ_HEAD(,pv_chunk)	pm_pvchunk;	/* list of mappings in pmap */
 		};
 	};
 #else
@@ -169,6 +187,27 @@ typedef struct pv_entry {
 	vm_offset_t	pv_va;		/* virtual address for mapping */
 	TAILQ_ENTRY(pv_entry)	pv_next;
 } *pv_entry_t;
+
+/*
+ * pv_entries are allocated in chunks per-process.  This avoids the
+ * need to track per-pmap assignments.
+ */
+#define	_NPCM	3
+#define	_NPCPV	168
+#define	PV_CHUNK_HEADER							\
+	pmap_t			pc_pmap;				\
+	TAILQ_ENTRY(pv_chunk)	pc_list;				\
+	uint64_t		pc_map[_NPCM];	/* bitmap; 1 = free */	\
+	TAILQ_ENTRY(pv_chunk)	pc_lru;
+
+struct pv_chunk_header {
+	PV_CHUNK_HEADER
+};
+
+struct pv_chunk {
+	PV_CHUNK_HEADER
+	struct pv_entry		pc_pventry[_NPCPV];
+};
 
 struct	md_page {
 	union {
@@ -305,7 +344,8 @@ boolean_t	pmap_mmu_install(char *name, int prio);
 				 * For more Ram increase the lmb or this value.
 				 */
 
-extern	vm_paddr_t phys_avail[PHYS_AVAIL_SZ];
+extern	vm_paddr_t phys_avail[];
+extern	vm_paddr_t dump_avail[];
 extern	vm_offset_t virtual_avail;
 extern	vm_offset_t virtual_end;
 
