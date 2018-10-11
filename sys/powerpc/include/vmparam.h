@@ -203,7 +203,22 @@ struct pmap_physseg {
  * Disable superpage reservations.
  */
 #ifndef	VM_NRESERVLEVEL
+#ifdef __powerpc64__
+#define	VM_NRESERVLEVEL		1
+#else
 #define	VM_NRESERVLEVEL		0
+#endif
+#endif
+
+/*
+ * Level 0 reservations consist of 512 pages.
+ */
+#ifndef	VM_LEVEL_0_ORDER
+#define	VM_LEVEL_0_ORDER	9
+#endif
+
+#ifdef	SMP
+#define	PA_LOCK_COUNT	256
 #endif
 
 #ifndef VM_INITIAL_PAGEIN
