@@ -111,15 +111,18 @@
  * Virtual addresses of things.  Derived from the page directory and
  * page table indexes from pmap.h for precision.
  *
+ * kernel map should be able to start at 0xc008000000000000 -
+ * but at least the functional simulator doesn't like it
+ *
  * 0x0000000000000000 - 0x00007fffffffffff   user map
  * 0xc000000000000000 - 0xc003ffffffffffff   direct map 
- * 0xc004000000000000 - 0xc00fffffffffffff   kernel map
+ * 0xc004000000000000 - 0xc007ffffffffffff   kernel map
  *
  */
 
 
 #define	VM_MIN_KERNEL_ADDRESS		0xc004000000000000UL
-#define	VM_MAX_KERNEL_ADDRESS		0xc00fffffffffffffUL
+#define	VM_MAX_KERNEL_ADDRESS		0xc007ffffffffffffUL
 #define	VM_MAX_SAFE_KERNEL_ADDRESS	VM_MAX_KERNEL_ADDRESS
 #endif
 
@@ -163,7 +166,7 @@ struct pmap_physseg {
 };
 #endif
 
-#define	VM_PHYSSEG_MAX		16	/* 1? */
+#define	VM_PHYSSEG_MAX		63	/* 1? */
 
 /*
  * The physical address space is densely populated on 32-bit systems,
@@ -257,6 +260,7 @@ struct pmap_physseg {
 #ifndef LOCORE
 #ifdef __powerpc64__
 #define	DMAP_BASE_ADDRESS	0xc000000000000000UL
+#define	DMAP_MIN_ADDRESS	DMAP_BASE_ADDRESS
 #define	DMAP_MAX_ADDRESS	0xcfffffffffffffffUL
 #else
 #define	DMAP_BASE_ADDRESS	0x00000000UL

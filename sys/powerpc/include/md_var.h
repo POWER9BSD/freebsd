@@ -39,6 +39,8 @@ extern	char	sigcode32[];
 extern	int	szsigcode32;
 
 #ifdef __powerpc64__
+extern uint64_t	*vm_page_dump;
+extern int	vm_page_dump_size;
 extern	char	sigcode64[], sigcode64_elfv2[];
 extern	int	szsigcode64, szsigcode64_elfv2;
 #endif
@@ -68,5 +70,8 @@ void	cpu_setup(u_int);
 
 struct	trapframe;
 void	powerpc_interrupt(struct trapframe *);
+
+void	dump_add_page(vm_paddr_t);
+void	dump_drop_page(vm_paddr_t);
 
 #endif /* !_MACHINE_MD_VAR_H_ */
