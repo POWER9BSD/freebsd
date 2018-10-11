@@ -83,6 +83,10 @@ __FBSDID("$FreeBSD$");
 #include <machine/trap.h>
 #include <machine/mmuvar.h>
 
+#ifdef INVARIANTS
+#include <vm/uma_dbg.h>
+#endif
+
 /*
  *
  */
@@ -2693,6 +2697,41 @@ METHOD(growkernel) vm_offset_t addr)
 	}
 }
 
+static MALLOC_DEFINE(M_RADIX_PGD, "radix_pgd", "radix page table root directory");
+static uma_zone_t zone_radix_pgd;
+
+static int
+radix_pgd_import(void *arg __unused, void **store, int count, int domain __unused,
+    int flags)
+{
+
+	for (int i = 0; i < count; i++) {
+		vm_page_t m = vm_page_alloc_contig(NULL, 0, VM_ALLOC_NORMAL | VM_ALLOC_NOOBJ |
+			VM_ALLOC_WIRED | VM_ALLOC_ZERO | VM_ALLOC_WAITOK, RADIX_PGD_SIZE/PAGE_SIZE,
+		    0, (vm_paddr_t)-1, RADIX_PGD_SIZE, L1_PAGE_SIZE, VM_MEMATTR_DEFAULT);
+		store[i] = (void *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(m));
+	}
+	return (count);
+}
+
+static void
+radix_pgd_release(void *arg __unused, void **store, int count)
+{
+	vm_page_t m;
+	struct spglist free;
+	int page_count;
+
+	SLIST_INIT(&free);
+	page_count = RADIX_PGD_SIZE/PAGE_SIZE;
+
+	for (int i = 0; i < count; i++) {
+		m = PHYS_TO_VM_PAGE(DMAP_TO_PHYS((vm_offset_t)store[i]));
+		for (int j = page_count-1; j >= 0; j--)
+			SLIST_INSERT_HEAD(&free, &m[j], plinks.s.ss); 
+		vm_page_free_pages_toq(&free, false);
+	}
+}
+
 VISIBILITY void
 METHODVOID(init)
 {
@@ -2702,6 +2741,17 @@ METHODVOID(init)
 
 	/* L1TF, reserve page @0 unconditionally */
 	vm_page_blacklist_add(0, bootverbose);
+
+	zone_radix_pgd = uma_zcache_create("radix_pgd_cache",
+		RADIX_PGD_SIZE, NULL, NULL,
+#ifdef INVARIANTS
+	    trash_init, trash_fini,
+#else
+	    NULL, NULL,
+#endif
+		radix_pgd_import, radix_pgd_release,
+		NULL, UMA_ZONE_NOBUCKET);
+
 	/*
 	 * Initialize the vm page array entries for the kernel pmap's
 	 * page table pages.
@@ -2848,22 +2898,40 @@ METHOD(page_wired_mappings) vm_page_t m)
 	return (0);
 }
 
+static inline int
+mmu_radix_pmap_pinit(pmap_t pmap)
+{
+
+	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
+
+	/*
+	 * allocate the page directory page
+	 */
+	pmap->pm_pml1 = uma_zalloc(zone_radix_pgd, M_WAITOK);
+
+	for (int j = 0; j <  RADIX_PGD_SIZE/PAGE_SIZE; j++)
+			pagezero(pmap->pm_pml1 + j*PAGE_SIZE);
+	pmap->pm_root.rt_root = 0;
+	CPU_ZERO(&pmap->pm_active);
+	TAILQ_INIT(&pmap->pm_pvchunk);
+	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
+	pmap->pm_flags = PMAP_PDE_SUPERPAGE;
+	return (1);
+}
+
 #ifdef MMU_DIRECT
 int
 pmap_pinit(pmap_t pmap)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
-	UNIMPLEMENTED();
-	return (1);
+	return (mmu_radix_pmap_pinit(pmap));
 }
 #else
-static void
+static inline void
 mmu_radix_pinit(mmu_t mmu, pmap_t pmap)
 {
-
-	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
-	UNIMPLEMENTED();
+	(void)mmu_radix_pmap_pinit(pmap);
 }
 #endif
 
@@ -3082,7 +3150,8 @@ METHOD(pinit0) pmap_t pmap)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
-	UNIMPLEMENTED();
+	PMAP_LOCK_INIT(pmap);
+	mmu_radix_pmap_pinit(pmap);
 }
 /*
  * pmap_protect_l3e: do the things to protect a 2mpage in a process
