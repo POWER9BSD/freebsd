@@ -1644,6 +1644,42 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 	return (allocoff);
 }
 
+static void
+mmu_radix_ofw_mappings_check(void)
+{
+	ihandle_t	mmui;
+	phandle_t	chosen;
+	phandle_t	mmu;
+	ssize_t		sz;
+
+	/*
+	 * Set up the Open Firmware pmap and add its mappings if not in real
+	 * mode.
+	 */
+
+	printf("%s enter\n", __func__);
+	chosen = OF_finddevice("/chosen");
+	printf("chosen=%x\n", chosen);
+	if (chosen != -1 && OF_getencprop(chosen, "mmu", &mmui, 4) != -1) {
+		mmu = OF_instance_to_package(mmui);
+		printf("mmu=%x\n", mmu);
+		if (mmu == -1)
+			sz = 0;
+		else if ((sz = OF_getproplen(mmu, "translations")) == -1)
+			sz = 0;
+		printf("sz=%lu\n", sz);
+		if (sz > 6144 /* tmpstksz - 2 KB headroom */)
+			panic("moea64_bootstrap: too many ofw translations");
+#ifdef notyet
+		if (sz > 0)
+			moea64_add_ofw_mappings(mmup, mmu, sz);
+#else
+		if (sz > 0)
+			panic("too many: %lu ofw mappings\n", sz);
+#endif
+	}
+}
+
 static vm_paddr_t
 mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 {
@@ -1656,6 +1692,7 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	kpstart = start & ~DMAP_BASE_ADDRESS;
 	kpend = end & ~DMAP_BASE_ADDRESS;
 
+	mmu_radix_ofw_mappings_check();
 	/* Get physical memory regions from firmware */
 	mem_regions(&pregions, &pregions_sz, &regions, &regions_sz);
 	CTR0(KTR_PMAP, "mmu_radix_early_bootstrap: physical memory");
@@ -1758,10 +1795,6 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 static void
 mmu_radix_late_bootstrap(vm_paddr_t allocoff, vm_offset_t start, vm_offset_t end)
 {
-	ihandle_t	mmui;
-	phandle_t	chosen;
-	phandle_t	mmu;
-	ssize_t		sz;
 	int		i;
 	vm_paddr_t	pa;
 	void		*dpcpu;
@@ -1773,26 +1806,7 @@ mmu_radix_late_bootstrap(vm_paddr_t allocoff, vm_offset_t start, vm_offset_t end
 	 */
 
 	printf("%s enter\n", __func__);
-	chosen = OF_finddevice("/chosen");
-	printf("chosen=%x\n", chosen);
-	if (chosen != -1 && OF_getencprop(chosen, "mmu", &mmui, 4) != -1) {
-		mmu = OF_instance_to_package(mmui);
-		printf("mmu=%x\n", mmu);
-		if (mmu == -1)
-			sz = 0;
-		else if ((sz = OF_getproplen(mmu, "translations")) == -1)
-			sz = 0;
-		printf("sz=%lu\n", sz);
-		if (sz > 6144 /* tmpstksz - 2 KB headroom */)
-			panic("moea64_bootstrap: too many ofw translations");
-#ifdef notyet
-		if (sz > 0)
-			moea64_add_ofw_mappings(mmup, mmu, sz);
-#else
-		if (sz > 0)
-			panic("too many: %lu ofw mappings\n", sz);
-#endif
-	}
+	mmu_radix_ofw_mappings_check();
 
 	/*
 	 * Calculate the last available physical address.
@@ -2187,7 +2201,7 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	KASSERT((flags & PMAP_ENTER_RESERVED) == 0,
 	    ("pmap_enter: flags %u has reserved bits set", flags));
 	pa = VM_PAGE_TO_PHYS(m);
-	newpte = (pt_entry_t)(pa | PG_A | PG_V);
+	newpte = (pt_entry_t)(pa | PG_A | PG_V | RPTE_LEAF);
 	if ((flags & VM_PROT_WRITE) != 0)
 		newpte |= PG_M;
 	if ((prot & VM_PROT_WRITE) != 0)
@@ -2387,9 +2401,11 @@ validate:
 		}
 		if ((origpte & PG_A) != 0)
 			pmap_invalidate_page(pmap, va);
-	} else
+	} else {
 		pte_store(pte, newpte);
-
+		printf("%s (*pte=%lx)=(newpte=%lx)\n",
+			   __func__, *pte, newpte);
+	}
 unchanged:
 
 #if VM_NRESERVLEVEL > 0
@@ -2410,8 +2426,6 @@ out:
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
 	return (rv);
-	UNIMPLEMENTED();
-	return (0);
 }
 
 
@@ -2830,14 +2844,12 @@ METHODVOID(init)
 {
 	vm_page_t mpte;
 	vm_size_t s;
-	int error, i, j, pv_npg;
+	int error, i, pv_npg;
 
 	/* L1TF, reserve page @0 unconditionally */
 	vm_page_blacklist_add(0, bootverbose);
 	mtmsr(psl_kernset & ~PSL_EE);
-	printf("%s\n", __func__);
 	
-	j = 0;
 	zone_radix_pgd = uma_zcache_create("radix_pgd_cache",
 		RADIX_PGD_SIZE, NULL, NULL,
 #ifdef INVARIANTS
@@ -2847,7 +2859,6 @@ METHODVOID(init)
 #endif
 		radix_pgd_import, radix_pgd_release,
 		NULL, UMA_ZONE_NOBUCKET);
-	printf("%s, %d\n", __func__, j++);
 
 	/*
 	 * Initialize the vm page array entries for the kernel pmap's
@@ -2869,7 +2880,7 @@ METHODVOID(init)
 	
 	CTR1(KTR_PMAP, "%s()", __func__);
 	TAILQ_INIT(&pv_dummy.pv_list);
-	printf("%s, %d\n", __func__, j++);
+
 	/*
 	 * Are large page mappings enabled?
 	 */
@@ -2901,24 +2912,17 @@ METHODVOID(init)
 	 */
 	s = (vm_size_t)(pv_npg * sizeof(struct md_page));
 	s = round_page(s);
-	printf("malloc && init pv_table\n");
 	pv_table = (struct md_page *)kmem_malloc(s, M_WAITOK | M_ZERO);
-	printf("pv_table=%p\n", pv_table);
 	for (i = 0; i < pv_npg; i++)
 		TAILQ_INIT(&pv_table[i].pv_list);
 	TAILQ_INIT(&pv_dummy.pv_list);
-	printf("malloc && init pv_table -- done\n");
-	printf("%s, %d\n", __func__, j++);
 
 	pmap_initialized = 1;
 	mtx_init(&qframe_mtx, "qfrmlk", NULL, MTX_SPIN);
-	printf("%s, %d\n", __func__, j++);
 	error = vmem_alloc(kernel_arena, PAGE_SIZE, M_BESTFIT | M_WAITOK,
 	    (vmem_addr_t *)&qframe);
 	if (error != 0)
 		panic("qframe allocation failed");
-	printf("%s done\n", __func__);
-
 }
 
 VISIBILITY boolean_t
