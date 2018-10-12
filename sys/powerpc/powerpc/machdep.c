@@ -412,15 +412,13 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	 * Bring up MMU
 	 */
 	pmap_bootstrap(startkernel, endkernel);
-	printf("pmap_bootstrap done\n");
-	//mtmsr(psl_kernset & ~PSL_EE);
-	//printf("EE cleared\n");
+	mtmsr(psl_kernset & ~PSL_EE);
+	printf("translation enabled\n");
 	/*
 	 * Initialize params/tunables that are derived from memsize
 	 */
-	printf("init_param2\n");
 	init_param2(physmem);
-	printf("init_param2 done\n");
+
 	/*
 	 * Grab booted kernel's name
 	 */
@@ -438,7 +436,7 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 		  sizeof(struct pcb)) & ~15UL);
 	printf("bzero %p\n", thread0.td_pcb);
 	bzero((void *)thread0.td_pcb, sizeof(struct pcb));
-	printf("set curpcb\n");
+	printf("set curpcb %p kstack: %lx\n", thread0.td_pcb, thread0.td_kstack);
 	pc->pc_curpcb = thread0.td_pcb;
 	printf("setup thread\n");
 	/* Initialise the message buffer. */
