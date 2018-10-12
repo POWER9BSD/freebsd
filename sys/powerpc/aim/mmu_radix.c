@@ -850,7 +850,7 @@ mmu_radix_pmap_kenter(vm_offset_t va, vm_paddr_t pa)
 	pt_entry_t *pte;
 
 	pte = vtopte(va);
-	*pte = pa | RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P;
+	*pte = pa | RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
 }
 
 /*
@@ -1519,28 +1519,31 @@ mmu_radix_dmap_populate(void)
 	CPU_FILL(&kernel_pmap->pm_active);
 
 	l1phys = moea64_bootstrap_alloc(RADIX_PGD_SIZE, RADIX_PGD_SIZE);
+	kernel_pmap->pm_pml1 = (pml1_entry_t *)PHYS_TO_DMAP(l1phys);
+	memset(kernel_pmap->pm_pml1, 0, RADIX_PGD_SIZE);
+
 	/* assert alignment */
 	printf("l1phys=%lx\n", l1phys);
 	MPASS((l1phys & (RADIX_PGD_SIZE-1)) == 0);
-	printf("allocating %lu pages\n", l1pages);
 	allocoff = l1phys + RADIX_PGD_SIZE;
+
+
+	printf("allocating %lu pages\n", l1pages);
 	pages = allocpages(&allocoff, l1pages);
-	memset((void*)PHYS_TO_DMAP(pages), 0, l1pages*PAGE_SIZE);
-	kernel_pmap->pm_pml1 = (pml1_entry_t *)PHYS_TO_DMAP(l1phys);
-	memset(kernel_pmap->pm_pml1, 0, RADIX_PGD_SIZE);
 	l2virt = (pml2_entry_t *)PHYS_TO_DMAP(pages);
+	memset(l2virt, 0, l1pages*PAGE_SIZE);
+	kernel_pmap->pm_pml1[0] = (pages | RPTE_VALID | RPTE_SHIFT);
 
 	off = 0;
-	memset(l2virt, 0, PAGE_SIZE);
 	pages = allocpages(&allocoff, 2);
-	l2virt[0] = (pages | RPTE_VALID | RPTE_SHIFT);
 	l3virt = (pml2_entry_t *)PHYS_TO_DMAP(pages);
+	memset(l3virt, 0, 2*PAGE_SIZE);
+	l2virt[0] = (pages | RPTE_VALID | RPTE_SHIFT);
 	pages += PAGE_SIZE;
-	//l2virt[1] = (pages | RPTE_VALID | RPTE_SHIFT);
-	memset(l3virt, 0, PAGE_SIZE);
+	l2virt[1] = (pages | RPTE_VALID | RPTE_SHIFT);
 
 	for (int i = 0; i < 384; i++, off += L3_PAGE_SIZE) {
-		l3virt[i] = off | RPTE_VALID | RPTE_LEAF | pattr;
+		l3virt[i] = off | RPTE_VALID | RPTE_LEAF | pattr | PG_M | PG_A;
 		if ((physsz - off) <= 0)
 			break;
 	}
@@ -1736,6 +1739,8 @@ mmu_radix_late_bootstrap(vm_paddr_t allocoff, vm_offset_t start, vm_offset_t end
 	for (i = 0; phys_avail[i + 2] != 0; i += 2)
 		Maxmem = max(Maxmem, powerpc_btop(phys_avail[i + 1]));
 
+
+	mtmsr(mfmsr() | PSL_DR | PSL_IR);
 	/*
 	 * Set the start and end of kva.
 	 */
@@ -1893,7 +1898,6 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	hw_direct_map = 1;
 	allocoff = mmu_radix_early_bootstrap(start, end);
 	printf("early bootstrap complete\n");
-
 	if (powernv_enabled) {
 		lpcr = mfspr(SPR_LPCR);
 		mtspr(SPR_LPCR, lpcr | LPCR_UPRT | LPCR_HR);
