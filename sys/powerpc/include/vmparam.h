@@ -114,20 +114,20 @@
  * kernel map should be able to start at 0xc008000000000000 -
  * but at least the functional simulator doesn't like it
  *
- * 0x0000000000000000 - 0x00007fffffffffff   user map
- * 0xc000000000000000 - 0xc003ffffffffffff   direct map 
- * 0xc004000000000000 - 0xc007ffffffffffff   kernel map
+ * 0x0000000000000000 - 0x000fffffffffffff   user map
+ * 0xc000000000000000 - 0xc007ffffffffffff   direct map 
+ * 0xc008000000000000 - 0xc00fffffffffffff   kernel map
  *
  */
 
 
-#define	VM_MIN_KERNEL_ADDRESS		0xc004000000000000UL
-#define	VM_MAX_KERNEL_ADDRESS		0xc007ffffffffffffUL
+#define	VM_MIN_KERNEL_ADDRESS		0xc008000000000000UL
+#define	VM_MAX_KERNEL_ADDRESS		0xc00fffffffffffffUL
 #define	VM_MAX_SAFE_KERNEL_ADDRESS	VM_MAX_KERNEL_ADDRESS
 #endif
 
 #ifdef AIM
-#define	KERNBASE		0x00100100UL	/* start of kernel virtual */
+#define	KERNBASE		0x20000000UL	/* start of kernel virtual */
 
 #ifndef __powerpc64__
 #define	VM_MIN_KERNEL_ADDRESS	((vm_offset_t)KERNEL_SR << ADDR_SR_SHFT)
