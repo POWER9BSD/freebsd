@@ -588,8 +588,8 @@ pa_cmp(const void *a, const void *b)
 #define RPTE_ENTRIES (1UL<<RPTE_SHIFT)
 #define RPTE_MASK (RPTE_ENTRIES-1)
 
-#define NLB_SHIFT 8
-#define NLB_MASK (((1UL<<52)-1) << NLB_SHIFT)
+#define NLB_SHIFT 0
+#define NLB_MASK (((1UL<<52)-1) << 8)
 
 #define	pte_load_store(ptep, pte)	atomic_swap_long(ptep, pte)
 #define	pte_load_clear(ptep)		atomic_swap_long(ptep, 0)	
@@ -597,7 +597,7 @@ pa_cmp(const void *a, const void *b)
 	*(u_long *)(ptep) = (u_long)(pte); \
 } while (0)
 #define	pde_store(ptep, pa) do {	   \
-		*(u_long *)(ptep) = (u_long)((pa << NLB_SHIFT)|RPTE_VALID|RPTE_SHIFT); \
+		*(u_long *)(ptep) = (u_long)(pa|RPTE_VALID|RPTE_SHIFT); \
 } while (0)
 
 #define	pte_clear(ptep)			pte_store(ptep, 0)
@@ -744,7 +744,7 @@ pmap_l3e_to_pte(pt_entry_t *l3e, vm_offset_t va)
 	pt_entry_t *pte;
 	vm_paddr_t ptepa;
 
-	ptepa = (*l3e & NLB_MASK) >> NLB_SHIFT;
+	ptepa = (*l3e & NLB_MASK);
 	pte = (pt_entry_t *)PHYS_TO_DMAP(ptepa);
 	return (&pte[pmap_pte_index(va)]);
 }
@@ -756,7 +756,7 @@ pmap_l2e_to_l3e(pt_entry_t *l2e, vm_offset_t va)
 	pt_entry_t *l3e;
 	vm_paddr_t l3pa;
 
-	l3pa = (*l2e & NLB_MASK) >> NLB_SHIFT;
+	l3pa = (*l2e & NLB_MASK);
 	l3e = (pml3_entry_t *)PHYS_TO_DMAP(l3pa);
 	return (&l3e[pmap_pml3e_index(va)]);
 }
@@ -768,7 +768,7 @@ pmap_l1e_to_l2e(pt_entry_t *l1e, vm_offset_t va)
 	pt_entry_t *l2e;
 	vm_paddr_t l2pa;
 
-	l2pa = (*l1e & NLB_MASK) >> NLB_SHIFT;
+	l2pa = (*l1e & NLB_MASK);
 	
 	l2e = (pml2_entry_t *)PHYS_TO_DMAP(l2pa);
 	return (&l2e[pmap_pml2e_index(va)]);
@@ -1506,7 +1506,7 @@ mmu_radix_dmap_populate(void)
 	uint64_t pattr;
 	vm_paddr_t l1phys, pages;
 	vm_ooffset_t off, physsz;
-	pml1_entry_t *l1virt;
+	pml1_entry_t *l2virt, *l3virt;
 	pt_entry_t *pte;
 	vm_paddr_t allocoff;
 
@@ -1525,12 +1525,28 @@ mmu_radix_dmap_populate(void)
 	printf("allocating %lu pages\n", l1pages);
 	allocoff = l1phys + RADIX_PGD_SIZE;
 	pages = allocpages(&allocoff, l1pages);
+	memset((void*)PHYS_TO_DMAP(pages), 0, l1pages*PAGE_SIZE);
 	kernel_pmap->pm_pml1 = (pml1_entry_t *)PHYS_TO_DMAP(l1phys);
 	memset(kernel_pmap->pm_pml1, 0, RADIX_PGD_SIZE);
-	off = 0;
+	l2virt = (pml2_entry_t *)PHYS_TO_DMAP(pages);
 
+	off = 0;
+	memset(l2virt, 0, PAGE_SIZE);
+	pages = allocpages(&allocoff, 2);
+	l2virt[0] = (pages | RPTE_VALID | RPTE_SHIFT);
+	l3virt = (pml2_entry_t *)PHYS_TO_DMAP(pages);
+	pages += PAGE_SIZE;
+	//l2virt[1] = (pages | RPTE_VALID | RPTE_SHIFT);
+	memset(l3virt, 0, PAGE_SIZE);
+
+	for (int i = 0; i < 384; i++, off += L3_PAGE_SIZE) {
+		l3virt[i] = off | RPTE_VALID | RPTE_LEAF | pattr;
+		if ((physsz - off) <= 0)
+			break;
+	}
+#ifdef notyet
 	for (int i = 0; i < l1pages; i++, pages += PAGE_SIZE) {
-		kernel_pmap->pm_pml1[i] = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
+		kernel_pmap->pm_pml1[i] = (pages | RPTE_VALID | RPTE_SHIFT);
 		l1virt = (pml2_entry_t *)PHYS_TO_DMAP(pages);
 		pagezero(l1virt);
 		for (int j = 0; j < RPTE_ENTRIES; j++) {
@@ -1540,22 +1556,24 @@ mmu_radix_dmap_populate(void)
 				break;
 		}
 	}
-
+#endif
+	
 	/*
 	 * Create page tables for first 128MB of KVA
 	 */
 	kptpages = /* l1 512GB */1 + /* l2 1GB */1 + /* l3 128MB */nkpt;
 	pages = allocpages(&allocoff, kptpages); 
+	memset((void*)PHYS_TO_DMAP(pages), 0, kptpages*PAGE_SIZE);
 	pte = pmap_pml1e(kernel_pmap, VM_MIN_KERNEL_ADDRESS);
-	*pte = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
+	*pte = (pages | RPTE_VALID | RPTE_SHIFT);
 	pages += PAGE_SIZE;
 	pte = pmap_l1e_to_l2e(pte, VM_MIN_KERNEL_ADDRESS);
-	*pte = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
+	*pte = (pages | RPTE_VALID | RPTE_SHIFT);
 	pages += PAGE_SIZE;
 	pte = pmap_l2e_to_l3e(pte, VM_MIN_KERNEL_ADDRESS);
 	KPTphys = pages;
 	for (int i = 0; i < nkpt; i++, pte++, pages += PAGE_SIZE)
-		*pte = ((pages << 8)| RPTE_VALID | RPTE_SHIFT);
+		*pte = (pages | RPTE_VALID | RPTE_SHIFT);
 	kernel_vm_end = VM_MIN_KERNEL_ADDRESS + nkpt*L3_PAGE_SIZE;
 
 	printf("kernel_pmap pml1 %p\n", kernel_pmap->pm_pml1);
@@ -1568,7 +1586,7 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	vm_paddr_t	kpstart, kpend;
 	vm_size_t	physsz, hwphyssz;
 	//uint64_t	l2virt;
-	int		rm_pavail, parttab_size;
+	int		rm_pavail, proctab_size;
 	int		i, j;
 
 	kpstart = start & ~DMAP_BASE_ADDRESS;
@@ -1659,9 +1677,15 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	}
 	physmem = btoc(physsz);	
 
-	parttab_size = 1UL << PARTTAB_SIZE_SHIFT;
-	proctab0pa = moea64_bootstrap_alloc(parttab_size, parttab_size);
+	/* XXX assume we're running non-virtualized and
+	 * we don't support BHYVE
+	 */
+	if (isa3_pid_bits == 0)
+		isa3_pid_bits = 20;
 	parttab_phys = moea64_bootstrap_alloc(PARTTAB_SIZE, PARTTAB_SIZE);
+
+	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
+	proctab0pa = moea64_bootstrap_alloc(proctab_size, proctab_size);
 
 	return (mmu_radix_dmap_populate());
 }
@@ -1682,13 +1706,18 @@ mmu_radix_late_bootstrap(vm_paddr_t allocoff, vm_offset_t start, vm_offset_t end
 	 * Set up the Open Firmware pmap and add its mappings if not in real
 	 * mode.
 	 */
+
 	printf("%s enter\n", __func__);
 	chosen = OF_finddevice("/chosen");
+	printf("chosen=%x\n", chosen);
 	if (chosen != -1 && OF_getencprop(chosen, "mmu", &mmui, 4) != -1) {
 		mmu = OF_instance_to_package(mmui);
-		if (mmu == -1 ||
-		    (sz = OF_getproplen(mmu, "translations")) == -1)
+		printf("mmu=%x\n", mmu);
+		if (mmu == -1)
 			sz = 0;
+		else if ((sz = OF_getproplen(mmu, "translations")) == -1)
+			sz = 0;
+		printf("sz=%lu\n", sz);
 		if (sz > 6144 /* tmpstksz - 2 KB headroom */)
 			panic("moea64_bootstrap: too many ofw translations");
 #ifdef notyet
@@ -1706,8 +1735,6 @@ mmu_radix_late_bootstrap(vm_paddr_t allocoff, vm_offset_t start, vm_offset_t end
 	Maxmem = 0;
 	for (i = 0; phys_avail[i + 2] != 0; i += 2)
 		Maxmem = max(Maxmem, powerpc_btop(phys_avail[i + 1]));
-	//	printf("%s set msr\n", __func__);
-	//mtmsr(mfmsr() | PSL_DR | PSL_IR);
 
 	/*
 	 * Set the start and end of kva.
@@ -1760,7 +1787,7 @@ mmu_parttab_init(void)
 
 	memset(isa3_parttab, 0, PARTTAB_SIZE);
 	printf("%s parttab: %p\n", __func__, isa3_parttab);
-	ptcr = parttab_phys | (PARTTAB_SIZE_SHIFT-1);
+	ptcr = parttab_phys | (PARTTAB_SIZE_SHIFT-12);
 	printf("setting ptcr %lx\n", ptcr);
 	mtspr(SPR_PTCR, ptcr);
 	printf("set ptcr\n");
@@ -1822,18 +1849,13 @@ mmu_radix_proctab_register(vm_paddr_t proctabpa, uint64_t table_size)
 static void
 mmu_radix_proctab_init(void)
 {
-	uint64_t parttab_size;
+	uint64_t proctab_size;
 
-	/* XXX assume we're running non-virtualized and
-	 * we don't support BHYVE
-	 */
-	if (isa3_pid_bits == 0)
-		isa3_pid_bits = 20;
 	isa3_base_pid = 1;
 
-	parttab_size = 1UL << PARTTAB_SIZE_SHIFT;
+	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
 	isa3_proctab = (void*)PHYS_TO_DMAP(proctab0pa);
-	memset(isa3_proctab, 0, parttab_size);
+	memset(isa3_proctab, 0, proctab_size);
 	isa3_proctab->proctab0 = htobe64(RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1) | \
 									 RADIX_PGD_INDEX_SHIFT);
 
@@ -1845,6 +1867,9 @@ mmu_radix_proctab_init(void)
 	__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
 	printf("process table %p and kernel radix PDE: %p\n",
 		   isa3_proctab, kernel_pmap->pm_pml1);
+	mtmsr(mfmsr() | PSL_DR );
+	mtmsr(mfmsr() &  ~PSL_DR);
+	printf("bounced data translation\n");
 	kernel_pmap->pm_pid = isa3_base_pid;
 	isa3_base_pid++;
 }
@@ -1865,7 +1890,7 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	vm_paddr_t allocoff;
 
 	printf("%s\n", __func__);
-
+	hw_direct_map = 1;
 	allocoff = mmu_radix_early_bootstrap(start, end);
 	printf("early bootstrap complete\n");
 
@@ -1881,7 +1906,6 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	}
 	mmu_radix_init_iamr();
 	mmu_radix_proctab_init();
-
 	mmu_radix_pid_set(kernel_pmap);
 	DELAY(10000);
 	printf("set pid\n");
@@ -1890,6 +1914,8 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	DELAY(10000);
 
 	mmu_radix_late_bootstrap(allocoff, start, end);
+	//psl_kernset &= ~(PSL_IR | PSL_DR);
+
 	printf("%s done\n", __func__);
 }
 
@@ -2741,6 +2767,7 @@ METHODVOID(init)
 
 	/* L1TF, reserve page @0 unconditionally */
 	vm_page_blacklist_add(0, bootverbose);
+	mtmsr(psl_kernset & ~PSL_EE);
 
 	zone_radix_pgd = uma_zcache_create("radix_pgd_cache",
 		RADIX_PGD_SIZE, NULL, NULL,
@@ -2988,7 +3015,7 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 		/* Wire up a new PDPE page */
 		pml1index = ptepindex - (NUPDE + NUPDPE);
 		pml1 = &pmap->pm_pml1[pml1index];
-		*pml1 = (VM_PAGE_TO_PHYS(m) << NLB_SHIFT) | RPTE_VALID | RPTE_SHIFT;
+		*pml1 = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
 
 	} else if (ptepindex >= NUPDE) {
 		vm_pindex_t pml1index;
@@ -3014,11 +3041,11 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 			pdppg = PHYS_TO_VM_PAGE(*pml1 & PG_FRAME);
 			pdppg->wire_count++;
 		}
-		pdp = (pml2_entry_t *)PHYS_TO_DMAP((*pml1 & PG_FRAME) >> NLB_SHIFT);
+		pdp = (pml2_entry_t *)PHYS_TO_DMAP(*pml1 & PG_FRAME);
 
 		/* Now find the pdp page */
 		pdp = &pdp[pdpindex & ((1ul << RPTE_SHIFT) - 1)];
-		*pdp = (VM_PAGE_TO_PHYS(m) << NLB_SHIFT) | RPTE_VALID | RPTE_SHIFT;
+		*pdp = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
 
 	} else {
 		vm_pindex_t pml1index;
@@ -3064,7 +3091,7 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 
 		/* Now we know where the page directory page is */
 		pd = &pd[ptepindex & ((1ul << RPTE_SHIFT) - 1)];
-		*pd = (VM_PAGE_TO_PHYS(m) << NLB_SHIFT) | RPTE_VALID | RPTE_SHIFT;
+		*pd = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
 	}
 
 	pmap_resident_count_inc(pmap, 1);
