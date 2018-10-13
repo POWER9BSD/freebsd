@@ -1667,6 +1667,16 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 
 	if (2 * VM_PHYSSEG_MAX < regions_sz)
 		panic("mmu_radix_early_bootstrap: phys_avail too small");
+
+	/*
+	 * XXX workaround a simulator bug
+	 */
+	for (int i = 0; i < regions_sz; i++)
+		if (regions[i].mr_start & PAGE_MASK) {
+			regions[i].mr_start += PAGE_MASK;
+			regions[i].mr_start &= ~PAGE_MASK;
+			regions[i].mr_size &= ~PAGE_MASK;
+		}
 	for (int i = 0; i < pregions_sz; i++)
 		printf("pregions[%d].mr_start=%lx pregions[%d].mr_size=%lx\n",
 			   i, pregions[i].mr_start, i, pregions[i].mr_size);
@@ -1676,9 +1686,10 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	hwphyssz = 0;
 	TUNABLE_ULONG_FETCH("hw.physmem", (u_long *) &hwphyssz);
 	for (i = 0, j = 0; i < regions_sz; i++) {
+		printf("regions[%d].mr_start=%016lx regions[%d].mr_size=%016lx\n",
+			   i, regions[i].mr_start, i, regions[i].mr_size);
 
-		if ((regions[i].mr_start & PAGE_MASK) ||
-			regions[i].mr_size < PAGE_SIZE)
+		if (regions[i].mr_size < PAGE_SIZE)
 			continue;
 
 		CTR3(KTR_PMAP, "region: %#zx - %#zx (%#zx)",
