@@ -830,13 +830,13 @@ pmap_resident_count_dec(pmap_t pmap, int count)
 }
 
 static uint64_t
-allocpages(vm_paddr_t *firstaddr, int n)
+allocpages(int n)
 {
 	u_int64_t ret;
 
-	ret = *firstaddr;
-	bzero((void *)PHYS_TO_DMAP(ret), n * PAGE_SIZE);
-	*firstaddr += n * PAGE_SIZE;
+	ret = moea64_bootstrap_alloc(n*PAGE_SIZE, PAGE_SIZE);
+	for (int i = 0; i < n; i++)
+		pagezero((void *)PHYS_TO_DMAP(ret + i*PAGE_SIZE));
 	return (ret);
 }
 
@@ -1526,7 +1526,7 @@ alloc_pt_page(void)
 {
 	vm_paddr_t page;
 
-	page = moea64_bootstrap_alloc(PAGE_SIZE, PAGE_SIZE);
+	page = allocpages(1);
 	pagezero((void*)PHYS_TO_DMAP(page));
 	return (page);
 }
@@ -1574,7 +1574,7 @@ mmu_radix_dmap_populate(vm_size_t hwphyssz)
 	vm_paddr_t pages, start, end;
 
 	l2pages = ((physmem << PAGE_SHIFT) + L1_PAGE_MASK) >> L1_PAGE_SIZE_SHIFT;
-	pages = moea64_bootstrap_alloc(l2pages*PAGE_SIZE, PAGE_SIZE);
+	pages = allocpages(l2pages);
 	printf("l2pages=%lu l2phys=%lx hwphyssz=%lx\n", l2pages, pages, hwphyssz);
 	for (int i = 0; i < l2pages; i++, pages += PAGE_SIZE) {
 		pagezero((void*)PHYS_TO_DMAP(pages));
@@ -1592,18 +1592,18 @@ mmu_radix_dmap_populate(vm_size_t hwphyssz)
 	}
 }
 
-static vm_paddr_t
+static void
 mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 {
 	vm_paddr_t ptpages, pages;
 	pt_entry_t *pte;
-	vm_paddr_t allocoff, l1phys;
+	vm_paddr_t l1phys;
 
 	bzero(kernel_pmap, sizeof(struct pmap));
 	PMAP_LOCK_INIT(kernel_pmap);
 	CPU_FILL(&kernel_pmap->pm_active);
 
-	ptpages = moea64_bootstrap_alloc(2*PAGE_SIZE, PAGE_SIZE);
+	ptpages = allocpages(2);
 	memset((void*)PHYS_TO_DMAP(ptpages), 0, 2*PAGE_SIZE);
 	l1phys = moea64_bootstrap_alloc(RADIX_PGD_SIZE, RADIX_PGD_SIZE);
 	printf("l1phys=%lx\n", l1phys);
@@ -1628,30 +1628,24 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 	 * the kernel page table pages need to be preserved in
 	 * phys_avail and not overlap with previous  allocations
 	 */
-	allocoff = 0;
 	for (int j = 0; j < 2*phys_avail_count; j+=2)
 		printf("phys_avail[%d]=%08lx - phys_avail[%d]=%08lx\n",
 			   j, phys_avail[j], j+1, phys_avail[j+1]);
 
-	for (int i = 0; phys_avail[i + 1] != 0; i += 2) {
-		int64_t delta = (int64_t)(phys_avail[i+1] - phys_avail[i]);
-
-		printf("delta = %ld\n", delta);
-		if (delta > 128*PAGE_SIZE) {
-			allocoff = phys_avail[i];
-			break;
-		}
-	}
-	MPASS(allocoff != 0);
-	printf("allocoff=%lx\n", allocoff);
-	
-	pages = allocpages(&allocoff, nkpt);
+	pages = allocpages(nkpt);
 	KPTphys = pages;
 	for (int i = 0; i < nkpt; i++, pte++, pages += PAGE_SIZE)
 		*pte = (pages | RPTE_VALID | RPTE_SHIFT);
 	kernel_vm_end = VM_MIN_KERNEL_ADDRESS + nkpt*L3_PAGE_SIZE;
 	printf("kernel_pmap pml1 %p\n", kernel_pmap->pm_pml1);
-	return (allocoff);
+	/*
+	 * Add a physical memory segment (vm_phys_seg) corresponding to the
+	 * preallocated kernel page table pages so that vm_page structures
+	 * representing these pages will be created.  The vm_page structures
+	 * are required for promotion of the corresponding kernel virtual
+	 * addresses to superpage mappings.
+	 */
+	vm_phys_add_seg(KPTphys, KPTphys + ptoa(nkpt));
 }
 
 static void
@@ -1690,7 +1684,7 @@ mmu_radix_ofw_mappings_check(void)
 	}
 }
 
-static vm_paddr_t
+static void
 mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 {
 	vm_paddr_t	kpstart, kpend;
@@ -1807,11 +1801,11 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
 	proctab0pa = moea64_bootstrap_alloc(proctab_size, proctab_size);
 
-	return (mmu_radix_setup_pagetables(hwphyssz));
+	mmu_radix_setup_pagetables(hwphyssz);
 }
 
 static void
-mmu_radix_late_bootstrap(vm_paddr_t allocoff, vm_offset_t start, vm_offset_t end)
+mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 {
 	int		i;
 	vm_paddr_t	pa;
@@ -1849,7 +1843,7 @@ mmu_radix_late_bootstrap(vm_paddr_t allocoff, vm_offset_t start, vm_offset_t end
 	 * Allocate a kernel stack with a guard page for thread0 and map it
 	 * into the kernel page map.
 	 */
-	pa = allocpages(&allocoff, kstack_pages);
+	pa = allocpages(kstack_pages);
 	va = virtual_avail + KSTACK_GUARD_PAGES * PAGE_SIZE;
 	virtual_avail = va + kstack_pages * PAGE_SIZE;
 	CTR2(KTR_PMAP, "moea64_bootstrap: kstack0 at %#x (%#x)", pa, va);
@@ -1865,13 +1859,13 @@ mmu_radix_late_bootstrap(vm_paddr_t allocoff, vm_offset_t start, vm_offset_t end
 	/*
 	 * Allocate virtual address space for the message buffer.
 	 */
-	pa = msgbuf_phys = allocpages(&allocoff, (msgbufsize + PAGE_MASK)  >> PAGE_SHIFT);
+	pa = msgbuf_phys = allocpages((msgbufsize + PAGE_MASK)  >> PAGE_SHIFT);
 	msgbufp = (struct msgbuf *)PHYS_TO_DMAP(pa);
 	printf("%s set msgbuf\n", __func__);
 	/*
 	 * Allocate virtual address space for the dynamic percpu area.
 	 */
-	pa = allocpages(&allocoff, (msgbufsize + PAGE_MASK) >> PAGE_SHIFT);
+	pa = allocpages((msgbufsize + PAGE_MASK) >> PAGE_SHIFT);
 	dpcpu = (void *)PHYS_TO_DMAP(pa);
 	dpcpu_init(dpcpu, curcpu);
 }
@@ -1985,11 +1979,10 @@ VISIBILITY void
 METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 {
 	uint64_t lpcr;
-	vm_paddr_t allocoff;
 
 	printf("%s\n", __func__);
 	hw_direct_map = 1;
-	allocoff = mmu_radix_early_bootstrap(start, end);
+	mmu_radix_early_bootstrap(start, end);
 	printf("early bootstrap complete\n");
 	if (powernv_enabled) {
 		lpcr = mfspr(SPR_LPCR);
@@ -2010,7 +2003,7 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
 	DELAY(10000);
 
-	mmu_radix_late_bootstrap(allocoff, start, end);
+	mmu_radix_late_bootstrap(start, end);
 	//psl_kernset &= ~(PSL_IR | PSL_DR);
 	__pcpu[0].pc_curpmap = kernel_pmap;
 
