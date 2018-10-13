@@ -276,7 +276,7 @@ struct pmap_physseg {
 #ifdef __powerpc64__
 #define	DMAP_BASE_ADDRESS	0xc000000000000000UL
 #define	DMAP_MIN_ADDRESS	DMAP_BASE_ADDRESS
-#define	DMAP_MAX_ADDRESS	0xcfffffffffffffffUL
+#define	DMAP_MAX_ADDRESS	0xc007ffffffffffffUL
 #else
 #define	DMAP_BASE_ADDRESS	0x00000000UL
 #define	DMAP_MAX_ADDRESS	0xbfffffffUL
