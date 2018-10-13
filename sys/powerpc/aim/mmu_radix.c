@@ -316,7 +316,6 @@ static void mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr
  */
 #define	PMAP_ENTER_NORECLAIM	0x1000000	/* Don't reclaim PV entries. */
 #define	PMAP_ENTER_NOREPLACE	0x2000000	/* Don't replace mappings. */
-#define PMAP_LOG_WIRE(m)  printf("%s:%d wire %p pa: %lx\n", __func__, __LINE__, (m), (m)->phys_addr)
 
 #define	curpmap		PCPU_GET(curpmap)
 
@@ -1802,7 +1801,6 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	for (i = 0; phys_avail[i + 2] != 0; i += 2)
 		Maxmem = max(Maxmem, powerpc_btop(phys_avail[i + 1]));
 
-	mtmsr(mfmsr() | PSL_DR | PSL_IR);
 	/*
 	 * Set the start and end of kva.
 	 */
@@ -1836,7 +1834,7 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	 */
 	pa = msgbuf_phys = allocpages((msgbufsize + PAGE_MASK)  >> PAGE_SHIFT);
 	msgbufp = (struct msgbuf *)PHYS_TO_DMAP(pa);
-	printf("%s set msgbuf\n", __func__);
+
 	/*
 	 * Allocate virtual address space for the dynamic percpu area.
 	 */
@@ -1886,7 +1884,6 @@ mmu_parttab_update(uint64_t lpid, uint64_t pagetab, uint64_t proctab)
 			     "r" (TLBIEL_INVAL_SET_LPID), "r" (lpid));
 	}
 	__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
-	printf("%s done\n", __func__);
 }
 
 static void
@@ -1936,7 +1933,6 @@ mmu_radix_proctab_init(void)
 		   isa3_proctab, kernel_pmap->pm_pml1);
 	mtmsr(mfmsr() | PSL_DR );
 	mtmsr(mfmsr() &  ~PSL_DR);
-	printf("bounced data translation\n");
 	kernel_pmap->pm_pid = isa3_base_pid;
 	isa3_base_pid++;
 }
@@ -1973,7 +1969,6 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	mmu_radix_proctab_init();
 	mmu_radix_pid_set(kernel_pmap);
 	DELAY(10000);
-	printf("set pid\n");
 	/* XXX assume CPU_FTR_HVMODE */
 	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
 	DELAY(10000);
@@ -2240,7 +2235,6 @@ retry:
 		if (va < VM_MAXUSER_ADDRESS && mpte == NULL) {
 			mpte = PHYS_TO_VM_PAGE(*l3e & PG_FRAME);
 
-			PMAP_LOG_WIRE(mpte);
 			mpte->wire_count++;
 		}
 	} else if (va < VM_MAXUSER_ADDRESS) {
@@ -2624,7 +2618,6 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 		 */
 		ptepindex = pmap_l3e_pindex(va);
 		if (mpte && (mpte->pindex == ptepindex)) {
-			PMAP_LOG_WIRE(mpte);
 			mpte->wire_count++;
 		} else {
 			/*
@@ -2642,7 +2635,6 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 				if (*ptepa & PG_PS)
 					return (NULL);
 				mpte = PHYS_TO_VM_PAGE(*ptepa & PG_FRAME);
-				PMAP_LOG_WIRE(mpte);
 				mpte->wire_count++;
 			} else {
 				/*
@@ -2866,7 +2858,6 @@ METHODVOID(init)
 		mpte->pindex = pmap_l3e_pindex(VM_MIN_KERNEL_ADDRESS) + i;
 		mpte->phys_addr = KPTphys + (i << PAGE_SHIFT);
 		pmap_insert_pt_page(kernel_pmap, mpte);
-		PMAP_LOG_WIRE(mpte);
 		mpte->wire_count = 1;
 	}
 	PMAP_UNLOCK(kernel_pmap);
@@ -3116,7 +3107,6 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 		} else {
 			/* Add reference to pdp page */
 			pdppg = PHYS_TO_VM_PAGE(*pml1 & PG_FRAME);
-			PMAP_LOG_WIRE(pdppg);
 			pdppg->wire_count++;
 		}
 		pdp = (pml2_entry_t *)PHYS_TO_DMAP(*pml1 & PG_FRAME);
@@ -3162,7 +3152,6 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 			} else {
 				/* Add reference to the pd page */
 				pdpg = PHYS_TO_VM_PAGE(*pdp & PG_FRAME);
-				PMAP_LOG_WIRE(pdpg);
 				pdpg->wire_count++;
 			}
 		}
@@ -3189,7 +3178,6 @@ retry:
 	if (pdpe != NULL && (*pdpe & PG_V) != 0) {
 		/* Add a reference to the pd page. */
 		pdpg = PHYS_TO_VM_PAGE(*pdpe & PG_FRAME);
-		PMAP_LOG_WIRE(pdpg);
 		pdpg->wire_count++;
 	} else {
 		/* Allocate a pd page. */
@@ -3239,7 +3227,6 @@ retry:
 	 */
 	if (pd != NULL && (*pd & PG_V) != 0) {
 		m = PHYS_TO_VM_PAGE(*pd & PG_FRAME);
-		PMAP_LOG_WIRE(m);
 		m->wire_count++;
 	} else {
 		/*
