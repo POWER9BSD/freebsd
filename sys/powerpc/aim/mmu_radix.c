@@ -309,6 +309,7 @@ static void _pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m,
     struct spglist *free);
 static boolean_t pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m, struct spglist *free);
 
+static void mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma);
 
 /*
  * Internal flags for pmap_enter()'s helper functions.
@@ -1649,42 +1650,6 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 }
 
 static void
-mmu_radix_ofw_mappings_check(void)
-{
-	ihandle_t	mmui;
-	phandle_t	chosen;
-	phandle_t	mmu;
-	ssize_t		sz;
-
-	/*
-	 * Set up the Open Firmware pmap and add its mappings if not in real
-	 * mode.
-	 */
-
-	printf("%s enter\n", __func__);
-	chosen = OF_finddevice("/chosen");
-	printf("chosen=%x\n", chosen);
-	if (chosen != -1 && OF_getencprop(chosen, "mmu", &mmui, 4) != -1) {
-		mmu = OF_instance_to_package(mmui);
-		printf("mmu=%x\n", mmu);
-		if (mmu == -1)
-			sz = 0;
-		else if ((sz = OF_getproplen(mmu, "translations")) == -1)
-			sz = 0;
-		printf("sz=%lu\n", sz);
-		if (sz > 6144 /* tmpstksz - 2 KB headroom */)
-			panic("moea64_bootstrap: too many ofw translations");
-#ifdef notyet
-		if (sz > 0)
-			moea64_add_ofw_mappings(mmup, mmu, sz);
-#else
-		if (sz > 0)
-			panic("too many: %lu ofw mappings\n", sz);
-#endif
-	}
-}
-
-static void
 mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 {
 	vm_paddr_t	kpstart, kpend;
@@ -1818,7 +1783,6 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	 */
 
 	printf("%s enter\n", __func__);
-	mmu_radix_ofw_mappings_check();
 
 	/*
 	 * Calculate the last available physical address.
@@ -4228,22 +4192,47 @@ METHOD(align_superpage) vm_object_t object, vm_ooffset_t offset,
 		*addr = ((*addr + L3_PAGE_MASK) & ~L3_PAGE_MASK) + superpage_offset;
 }
 
+static void *
+mmu_radix_pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
+{
+	vm_offset_t va, tmpva, ppa, offset;
+
+	ppa = trunc_page(pa);
+	offset = pa & PAGE_MASK;
+	size = roundup2(offset + size, PAGE_SIZE);
+
+	va = kva_alloc(size);
+
+	if (!va)
+		panic("%s: Couldn't alloc kernel virtual memory", __func__);
+
+	for (tmpva = va; size > 0;) {
+		mmu_radix_pmap_kenter_attr(tmpva, ppa, attr);
+		size -= PAGE_SIZE;
+		tmpva += PAGE_SIZE;
+		ppa += PAGE_SIZE;
+	}
+
+	return ((void *)(va + offset));
+}
+
 VISIBILITY void *
 METHOD(mapdev) vm_paddr_t pa, vm_size_t size)
 {
 
 	CTR3(KTR_PMAP, "%s(%#x, %#x)", __func__, pa, size);
-	UNIMPLEMENTED();
-	return (NULL);
+
+	return (mmu_radix_pmap_mapdev_attr(pa, size, VM_MEMATTR_DEFAULT));
 }
+
+
 
 VISIBILITY void *
 METHOD(mapdev_attr) vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 {
 
 	CTR4(KTR_PMAP, "%s(%#x, %#x, %#x)", __func__, pa, size, attr);
-	UNIMPLEMENTED();
-	return (NULL);
+	return (mmu_radix_pmap_mapdev_attr(pa, size, attr));
 }
 
 VISIBILITY void
@@ -4299,12 +4288,56 @@ METHOD(kenter) vm_offset_t va, vm_paddr_t pa)
 	mmu_radix_pmap_kenter(va, pa);
 }
 
+static pt_entry_t
+mmu_radix_calc_wimg(vm_paddr_t pa, vm_memattr_t ma)
+{
+
+	printf("pa=%lx ma=%x\n", pa, ma);
+	if (ma != VM_MEMATTR_DEFAULT) {
+		switch (ma) {
+		case VM_MEMATTR_UNCACHEABLE:
+			return (RPTE_ATTR_GUARDEDIO);
+		case VM_MEMATTR_CACHEABLE:
+			return (RPTE_ATTR_MEM);
+		case VM_MEMATTR_WRITE_COMBINING:
+		case VM_MEMATTR_WRITE_BACK:
+		case VM_MEMATTR_PREFETCHABLE:
+			return (RPTE_ATTR_UNGUARDEDIO);
+		}
+	}
+
+	/*
+	 * Assume the page is cache inhibited and access is guarded unless
+	 * it's in our available memory array.
+	 */
+	for (int i = 0; i < pregions_sz; i++) {
+		if ((pa >= pregions[i].mr_start) &&
+		    (pa < (pregions[i].mr_start + pregions[i].mr_size)))
+			return (0);
+	}
+	return (RPTE_ATTR_GUARDEDIO);
+}
+
+static void
+mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma)
+{
+	pt_entry_t *pte, pteval;
+	uint64_t cache_bits;
+
+	pte = kvtopte(va);
+	MPASS(pte != NULL);
+	pteval = pa | RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
+	cache_bits = mmu_radix_calc_wimg(pa, ma);
+	printf("cache_bits=%lx\n", cache_bits);
+	pte_store(pte, pteval | cache_bits);
+}
+
 VISIBILITY void
 METHOD(kenter_attr) vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma)
 {
 
 	CTR4(KTR_PMAP, "%s(%#x, %#x, %#x)", __func__, va, pa, ma);
-	UNIMPLEMENTED();
+	mmu_radix_pmap_kenter_attr(va, pa, ma);
 }
 
 VISIBILITY void
