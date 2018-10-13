@@ -315,7 +315,7 @@ static boolean_t pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m, struc
  */
 #define	PMAP_ENTER_NORECLAIM	0x1000000	/* Don't reclaim PV entries. */
 #define	PMAP_ENTER_NOREPLACE	0x2000000	/* Don't replace mappings. */
-
+#define PMAP_LOG_WIRE(m)  printf("%s:%d wire %p pa: %lx\n", __func__, __LINE__, (m), (m)->phys_addr)
 
 #define	curpmap		PCPU_GET(curpmap)
 
@@ -740,7 +740,7 @@ static __inline vm_pindex_t
 pmap_pml1e_index(vm_offset_t va)
 {
 	if (pmap_debug)
-		printf("l1idx: %lu\n", ((va & PG_FRAME) >> L1_PAGE_SIZE_SHIFT));
+		printf("l1idx(%lx): %lu\n", va, ((va & PG_FRAME) >> L1_PAGE_SIZE_SHIFT));
 	return ((va & PG_FRAME) >> L1_PAGE_SIZE_SHIFT);
 }
 
@@ -1573,20 +1573,22 @@ mmu_radix_dmap_populate(vm_size_t hwphyssz)
 	u_long l2pages;
 	vm_paddr_t pages, start, end;
 
-	l2pages = (hwphyssz + L1_PAGE_MASK) >> L1_PAGE_SIZE_SHIFT;
+	l2pages = ((physmem << PAGE_SHIFT) + L1_PAGE_MASK) >> L1_PAGE_SIZE_SHIFT;
 	pages = moea64_bootstrap_alloc(l2pages*PAGE_SIZE, PAGE_SIZE);
-	printf("l2pages=%lu l2phys=%lx\n", l2pages, pages);
+	printf("l2pages=%lu l2phys=%lx hwphyssz=%lx\n", l2pages, pages, hwphyssz);
 	for (int i = 0; i < l2pages; i++, pages += PAGE_SIZE) {
 		pagezero((void*)PHYS_TO_DMAP(pages));
 		printf("pml1[%d]= %lx\n", i, pages);
 		kernel_pmap->pm_pml1[i] = (pages | RPTE_VALID | RPTE_SHIFT);
 	}
-	for (int i = 0; i < regions_sz; i++) {
-		start = regions[i].mr_start;
-		end = start + regions[i].mr_size;
-		if (start >= hwphyssz)
+	for (int i = 0; i < pregions_sz; i++) {
+		start = pregions[i].mr_start;
+		end = start + pregions[i].mr_size;
+		if (hwphyssz && start >= hwphyssz)
 			break;
-		mmu_radix_dmap_range(start, min(end, hwphyssz));
+		if (hwphyssz && hwphyssz < end)
+			end = hwphyssz;
+		mmu_radix_dmap_range(start, end);
 	}
 }
 
@@ -1609,8 +1611,8 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 	kernel_pmap->pm_pml1 = (pml1_entry_t *)PHYS_TO_DMAP(l1phys);
 	memset(kernel_pmap->pm_pml1, 0, RADIX_PGD_SIZE);
 
-	
 	mmu_radix_dmap_populate(hwphyssz);
+
 	/*
 	 * Create page tables for first 128MB of KVA
 	 */
@@ -1626,13 +1628,21 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 	 * the kernel page table pages need to be preserved in
 	 * phys_avail and not overlap with previous  allocations
 	 */
+	allocoff = 0;
+	for (int j = 0; j < 2*phys_avail_count; j+=2)
+		printf("phys_avail[%d]=%08lx - phys_avail[%d]=%08lx\n",
+			   j, phys_avail[j], j+1, phys_avail[j+1]);
+
 	for (int i = 0; phys_avail[i + 1] != 0; i += 2) {
-		if (phys_avail[i] > l1phys + RADIX_PGD_SIZE &&
-			(phys_avail[i+1] - phys_avail[i] > 128*PAGE_SIZE)) {
+		int64_t delta = (int64_t)(phys_avail[i+1] - phys_avail[i]);
+
+		printf("delta = %ld\n", delta);
+		if (delta > 128*PAGE_SIZE) {
 			allocoff = phys_avail[i];
 			break;
 		}
 	}
+	MPASS(allocoff != 0);
 	printf("allocoff=%lx\n", allocoff);
 	
 	pages = allocpages(&allocoff, nkpt);
@@ -1692,21 +1702,26 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	kpstart = start & ~DMAP_BASE_ADDRESS;
 	kpend = end & ~DMAP_BASE_ADDRESS;
 
-	mmu_radix_ofw_mappings_check();
 	/* Get physical memory regions from firmware */
 	mem_regions(&pregions, &pregions_sz, &regions, &regions_sz);
 	CTR0(KTR_PMAP, "mmu_radix_early_bootstrap: physical memory");
 
 	if (2 * VM_PHYSSEG_MAX < regions_sz)
 		panic("mmu_radix_early_bootstrap: phys_avail too small");
+	for (int i = 0; i < pregions_sz; i++)
+		printf("pregions[%d].mr_start=%lx pregions[%d].mr_size=%lx\n",
+			   i, pregions[i].mr_start, i, pregions[i].mr_size);
 
 	phys_avail_count = 0;
 	physsz = 0;
 	hwphyssz = 0;
 	TUNABLE_ULONG_FETCH("hw.physmem", (u_long *) &hwphyssz);
-	for (i = 0, j = 0; i < regions_sz; i++, j += 2) {
-		printf("regions[%d].mr_start: %lx regions[%d].mr_size: %lx\n",
-			   i, regions[i].mr_start, i, regions[i].mr_size);
+	for (i = 0, j = 0; i < regions_sz; i++) {
+
+		if ((regions[i].mr_start & PAGE_MASK) ||
+			regions[i].mr_size < PAGE_SIZE)
+			continue;
+
 		CTR3(KTR_PMAP, "region: %#zx - %#zx (%#zx)",
 		    regions[i].mr_start, regions[i].mr_start +
 		    regions[i].mr_size, regions[i].mr_size);
@@ -1725,6 +1740,7 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 		phys_avail[j + 1] = regions[i].mr_start + regions[i].mr_size;
 		phys_avail_count++;
 		physsz += regions[i].mr_size;
+		j += 2;
 	}
 
 	/* Check for overlap with the kernel and exception vectors */
@@ -1766,6 +1782,9 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 			    PAGE_SIZE;
 		}
 	}
+	for (j = 0; j < 2*phys_avail_count; j+=2)
+		printf("phys_avail[%d]=%08lx - phys_avail[%d]=%08lx\n",
+			   j, phys_avail[j], j+1, phys_avail[j+1]);
 
 	/* Remove physical available regions marked for removal (~0) */
 	if (rm_pavail) {
@@ -1788,7 +1807,6 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
 	proctab0pa = moea64_bootstrap_alloc(proctab_size, proctab_size);
 
-	hwphyssz = hwphyssz ? hwphyssz : physsz;
 	return (mmu_radix_setup_pagetables(hwphyssz));
 }
 
@@ -1995,6 +2013,7 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	mmu_radix_late_bootstrap(allocoff, start, end);
 	//psl_kernset &= ~(PSL_IR | PSL_DR);
 	__pcpu[0].pc_curpmap = kernel_pmap;
+
 	printf("%s done\n", __func__);
 }
 
@@ -2187,8 +2206,10 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	int rv;
 	boolean_t nosleep;
 
+#if 0	
 	printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d)\n", pmap, va,
 	    m, prot, flags, psind);
+#endif
 	va = trunc_page(va);
 	CTR6(KTR_PMAP, "pmap_enter(%p, %#lx, %p, %#x, %x, %d)", pmap, va,
 	    m, prot, flags, psind);
@@ -2250,6 +2271,8 @@ retry:
 		pte = pmap_l3e_to_pte(l3e, va);
 		if (va < VM_MAXUSER_ADDRESS && mpte == NULL) {
 			mpte = PHYS_TO_VM_PAGE(*l3e & PG_FRAME);
+
+			PMAP_LOG_WIRE(mpte);
 			mpte->wire_count++;
 		}
 	} else if (va < VM_MAXUSER_ADDRESS) {
@@ -2401,11 +2424,8 @@ validate:
 		}
 		if ((origpte & PG_A) != 0)
 			pmap_invalidate_page(pmap, va);
-	} else {
+	} else
 		pte_store(pte, newpte);
-		printf("%s (*pte=%lx)=(newpte=%lx)\n",
-			   __func__, *pte, newpte);
-	}
 unchanged:
 
 #if VM_NRESERVLEVEL > 0
@@ -2636,6 +2656,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 		 */
 		ptepindex = pmap_l3e_pindex(va);
 		if (mpte && (mpte->pindex == ptepindex)) {
+			PMAP_LOG_WIRE(mpte);
 			mpte->wire_count++;
 		} else {
 			/*
@@ -2653,6 +2674,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 				if (*ptepa & PG_PS)
 					return (NULL);
 				mpte = PHYS_TO_VM_PAGE(*ptepa & PG_FRAME);
+				PMAP_LOG_WIRE(mpte);
 				mpte->wire_count++;
 			} else {
 				/*
@@ -2811,13 +2833,16 @@ static int
 radix_pgd_import(void *arg __unused, void **store, int count, int domain __unused,
     int flags)
 {
-
+	printf("%s(%p, %p, %d, %d, %x)\n",
+		   __func__, arg, store, count, domain, flags);
+	
 	for (int i = 0; i < count; i++) {
 		vm_page_t m = vm_page_alloc_contig(NULL, 0, VM_ALLOC_NORMAL | VM_ALLOC_NOOBJ |
 			VM_ALLOC_WIRED | VM_ALLOC_ZERO | VM_ALLOC_WAITOK, RADIX_PGD_SIZE/PAGE_SIZE,
 		    0, (vm_paddr_t)-1, RADIX_PGD_SIZE, L1_PAGE_SIZE, VM_MEMATTR_DEFAULT);
 		store[i] = (void *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(m));
 	}
+	printf("%s done\n", __func__);
 	return (count);
 }
 
@@ -2848,7 +2873,6 @@ METHODVOID(init)
 
 	/* L1TF, reserve page @0 unconditionally */
 	vm_page_blacklist_add(0, bootverbose);
-	mtmsr(psl_kernset & ~PSL_EE);
 	
 	zone_radix_pgd = uma_zcache_create("radix_pgd_cache",
 		RADIX_PGD_SIZE, NULL, NULL,
@@ -2871,8 +2895,10 @@ METHODVOID(init)
 		    mpte < &vm_page_array[vm_page_array_size],
 				("pmap_init: page table page is out of range size: %lu",
 				 vm_page_array_size));
-		mpte->pindex = pmap_l3e_pindex(KERNBASE) + i;
+		mpte->pindex = pmap_l3e_pindex(VM_MIN_KERNEL_ADDRESS) + i;
 		mpte->phys_addr = KPTphys + (i << PAGE_SHIFT);
+		pmap_insert_pt_page(kernel_pmap, mpte);
+		PMAP_LOG_WIRE(mpte);
 		mpte->wire_count = 1;
 	}
 	PMAP_UNLOCK(kernel_pmap);
@@ -2962,12 +2988,14 @@ METHOD(ts_referenced) vm_page_t m)
 }
 
 VISIBILITY vm_offset_t
-METHOD(map) vm_offset_t *virt __unused, vm_paddr_t start, vm_paddr_t end __unused, int prot __unused)
+METHOD(map) vm_offset_t *virt __unused, vm_paddr_t start, vm_paddr_t end, int prot __unused)
 {
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %#x, %#x)", __func__, virt, start, end,
 	    prot);
-	return PHYS_TO_DMAP(start);
+	for (vm_paddr_t sva = start; sva < end; sva += PAGE_SIZE)
+		pagezero((void*)PHYS_TO_DMAP(sva));
+	return (PHYS_TO_DMAP(start));
 }
 
 VISIBILITY void
@@ -3120,6 +3148,7 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 		} else {
 			/* Add reference to pdp page */
 			pdppg = PHYS_TO_VM_PAGE(*pml1 & PG_FRAME);
+			PMAP_LOG_WIRE(pdppg);
 			pdppg->wire_count++;
 		}
 		pdp = (pml2_entry_t *)PHYS_TO_DMAP(*pml1 & PG_FRAME);
@@ -3165,6 +3194,7 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 			} else {
 				/* Add reference to the pd page */
 				pdpg = PHYS_TO_VM_PAGE(*pdp & PG_FRAME);
+				PMAP_LOG_WIRE(pdpg);
 				pdpg->wire_count++;
 			}
 		}
@@ -3191,6 +3221,7 @@ retry:
 	if (pdpe != NULL && (*pdpe & PG_V) != 0) {
 		/* Add a reference to the pd page. */
 		pdpg = PHYS_TO_VM_PAGE(*pdpe & PG_FRAME);
+		PMAP_LOG_WIRE(pdpg);
 		pdpg->wire_count++;
 	} else {
 		/* Allocate a pd page. */
@@ -3240,6 +3271,7 @@ retry:
 	 */
 	if (pd != NULL && (*pd & PG_V) != 0) {
 		m = PHYS_TO_VM_PAGE(*pd & PG_FRAME);
+		PMAP_LOG_WIRE(m);
 		m->wire_count++;
 	} else {
 		/*
@@ -3259,7 +3291,12 @@ METHOD(pinit0) pmap_t pmap)
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
 	PMAP_LOCK_INIT(pmap);
-	mmu_radix_pmap_pinit(pmap);
+	pmap->pm_pml1 = kernel_pmap->pm_pml1;
+	pmap->pm_root.rt_root = 0;
+	CPU_ZERO(&pmap->pm_active);
+	TAILQ_INIT(&pmap->pm_pvchunk);
+	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
+	pmap->pm_flags = PMAP_PDE_SUPERPAGE;
 }
 /*
  * pmap_protect_l3e: do the things to protect a 2mpage in a process
@@ -3470,11 +3507,19 @@ METHOD(qenter) vm_offset_t sva, vm_page_t *ma, int count)
 }
 
 VISIBILITY void
-METHOD(qremove) vm_offset_t start, int count)
+METHOD(qremove) vm_offset_t sva, int count)
 {
+	vm_offset_t va;
 
-	CTR3(KTR_PMAP, "%s(%#x, %d)", __func__, start, count);
-	UNIMPLEMENTED();
+	CTR3(KTR_PMAP, "%s(%#x, %d)", __func__, sva, count);
+
+	va = sva;
+	while (count-- > 0) {
+		KASSERT(va >= VM_MIN_KERNEL_ADDRESS, ("usermode or dmap va %lx", va));
+		pmap_kremove(va);
+		va += PAGE_SIZE;
+	}
+	pmap_invalidate_range(kernel_pmap, sva, va);
 }
 
 /***************************************************
@@ -4272,9 +4317,12 @@ METHOD(kenter_attr) vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma)
 VISIBILITY void
 METHOD(kremove) vm_offset_t va)
 {
+	pt_entry_t *pte;
 
 	CTR2(KTR_PMAP, "%s(%#x)", __func__, va);
-	UNIMPLEMENTED();
+
+	pte = kvtopte(va);
+	pte_clear(pte);
 }
 
 VISIBILITY int
