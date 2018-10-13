@@ -381,6 +381,8 @@ static int	regions_sz, pregions_sz;
 static struct pate *isa3_parttab;
 static struct prte *isa3_proctab;
 
+extern void bs_remap_earlyboot(void);
+
 #define	RADIX_PGD_SIZE_SHIFT	16
 #define RADIX_PGD_SIZE	(1UL << RADIX_PGD_SIZE_SHIFT)
 
@@ -1806,12 +1808,12 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	 */
 	virtual_avail = VM_MIN_KERNEL_ADDRESS;
 	virtual_end = VM_MAX_SAFE_KERNEL_ADDRESS; 
-#if 0
+
 	/*
 	 * Remap any early IO mappings (console framebuffer, etc.)
 	 */
 	bs_remap_earlyboot();
-#endif
+
 	/*
 	 * Allocate a kernel stack with a guard page for thread0 and map it
 	 * into the kernel page map.
@@ -2062,6 +2064,7 @@ pmap_promote_l3e(pmap_t pmap, pml3_entry_t *pde, vm_offset_t va,
 
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
 
+	panic("%s -- sanity check\n", __func__);
 	/*
 	 * Examine the first PTE in the specified PTP.  Abort if this PTE is
 	 * either invalid, unused, or does not map the first 4KB physical page
@@ -2147,7 +2150,7 @@ setpte:
 	if ((newpde & PG_MANAGED) != 0)
 		pmap_pv_promote_l3e(pmap, va, newpde & PG_PS_FRAME, lockp);
 
-	pde_store(pde, PG_PROMOTED | PG_PS | newpde);
+	pte_store(pde, PG_PROMOTED | RPTE_LEAF | RPTE_VALID | newpde);
 
 	atomic_add_long(&pmap_l3e_promotions, 1);
 	CTR2(KTR_PMAP, "pmap_promote_l3e: success for va %#lx"
@@ -2687,7 +2690,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	 */
 	pmap_resident_count_inc(pmap, 1);
 
-	pa = VM_PAGE_TO_PHYS(m) | pmap_cache_bits(pmap, m->md.pat_mode, 0);
+	pa = VM_PAGE_TO_PHYS(m) | RPTE_LEAF | pmap_cache_bits(pmap, m->md.pat_mode, 0);
 	if (prot & VM_PROT_EXECUTE)
 		pa |= PG_X;
 
@@ -3721,7 +3724,7 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	}
 	mptepa = VM_PAGE_TO_PHYS(mpte);
 	firstpte = (pt_entry_t *)PHYS_TO_DMAP(mptepa);
-	newpde = mptepa | PG_M | PG_A | (oldpde & RPTE_EAA_P) | PG_RW | PG_V;
+	newpde = mptepa | PG_V | RPTE_SHIFT;
 	KASSERT((oldpde & PG_A) != 0,
 	    ("pmap_demote_l3e: oldpde is missing PG_A"));
 	KASSERT((oldpde & (PG_M | PG_RW)) != PG_RW,
@@ -3801,7 +3804,7 @@ pmap_remove_kernel_l3e(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va)
 		panic("pmap_remove_kernel_pde: Missing pt page.");
 
 	mptepa = VM_PAGE_TO_PHYS(mpte);
-	newpde = mptepa | PG_M | PG_A | PG_RW | PG_V;
+	newpde = mptepa | RPTE_SHIFT | PG_V;
 
 	/*
 	 * Initialize the page table page.
@@ -4381,8 +4384,7 @@ METHOD(dev_direct_mapped) vm_paddr_t pa, vm_size_t size)
 {
 
 	CTR3(KTR_PMAP, "%s(%#x, %#x)", __func__, pa, size);
-	UNIMPLEMENTED();
-	return (false);
+	return (mem_valid(pa, size));
 }
 
 VISIBILITY void
