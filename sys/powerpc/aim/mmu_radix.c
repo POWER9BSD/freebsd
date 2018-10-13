@@ -4481,3 +4481,51 @@ pmap_is_valid_memattr(pmap_t pmap __unused, vm_memattr_t mode)
 	}
 }
 #endif
+
+#include "opt_ddb.h"
+#ifdef DDB
+#include <sys/kdb.h>
+#include <ddb/ddb.h>
+
+DB_SHOW_COMMAND(pte, pmap_print_pte)
+{
+	pmap_t pmap;
+	pml1_entry_t *l1e;
+	pml2_entry_t *l2e;
+	pml3_entry_t *l3e;
+	pt_entry_t *pte;
+	vm_offset_t va;
+
+	if (!have_addr) {
+		db_printf("show pte addr\n");
+		return;
+	}
+	va = (vm_offset_t)addr;
+
+	if (kdb_thread != NULL)
+		pmap = vmspace_pmap(kdb_thread->td_proc->p_vmspace);
+	else
+		pmap = PCPU_GET(curpmap);
+
+	l1e = pmap_pml1e(pmap, va);
+	db_printf("VA %#016lx l1e %#016lx", va, *l1e);
+	if ((*l1e & PG_V) == 0) {
+		db_printf("\n");
+		return;
+	}
+	l2e = pmap_l1e_to_l2e(l1e, va);
+	db_printf(" l2e %#016lx", *l2e);
+	if ((*l2e & PG_V) == 0 || (*l2e & RPTE_LEAF) != 0) {
+		db_printf("\n");
+		return;
+	}
+	l3e = pmap_l2e_to_l3e(l2e, va);
+	db_printf(" l3e %#016lx", *l3e);
+	if ((*l3e & PG_V) == 0 || (*l3e & RPTE_LEAF) != 0) {
+		db_printf("\n");
+		return;
+	}
+	pte = pmap_l3e_to_pte(l3e, va);
+	db_printf(" pte %#016lx\n", *pte);
+}
+#endif
