@@ -2163,7 +2163,7 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	int rv;
 	boolean_t nosleep;
 
-#if 0	
+#if 0
 	printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d)\n", pmap, va,
 	    m, prot, flags, psind);
 #endif
@@ -3249,6 +3249,7 @@ METHOD(pinit0) pmap_t pmap)
 	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
 	PMAP_LOCK_INIT(pmap);
 	pmap->pm_pml1 = kernel_pmap->pm_pml1;
+	pmap->pm_pid = kernel_pmap->pm_pid;
 	pmap->pm_root.rt_root = 0;
 	CPU_ZERO(&pmap->pm_active);
 	TAILQ_INIT(&pmap->pm_pvchunk);
@@ -4152,17 +4153,24 @@ METHOD(mincore) pmap_t pmap, vm_offset_t addr, vm_paddr_t *locked_pa)
 VISIBILITY void
 METHOD(activate) struct thread *td)
 {
+	pmap_t oldpmap, pmap;
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, td);
-	UNIMPLEMENTED();
+	critical_enter();
+	oldpmap = PCPU_GET(curpmap);
+	pmap = vmspace_pmap(td->td_proc->p_vmspace);
+	if (oldpmap != pmap) {
+		PCPU_SET(curpmap, pmap);
+		mmu_radix_pid_set(pmap);
+	}
+	critical_exit();
 }
 
 VISIBILITY void
 METHOD(deactivate) struct thread *td)
 {
-
 	CTR2(KTR_PMAP, "%s(%p)", __func__, td);
-	UNIMPLEMENTED();
+	/* really needed ? */
 }
 
 /*
