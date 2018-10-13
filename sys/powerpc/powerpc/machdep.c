@@ -412,6 +412,8 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	 * Bring up MMU
 	 */
 	pmap_bootstrap(startkernel, endkernel);
+	printf("enabling translation\n");
+	DELAY(10000);
 	mtmsr(psl_kernset & ~PSL_EE);
 	printf("translation enabled\n");
 	/*
