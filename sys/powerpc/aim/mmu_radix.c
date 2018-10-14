@@ -2712,13 +2712,44 @@ METHOD(enter_quick) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot)
 
 }
 
+static vm_paddr_t
+mmu_radix_pmap_extract(pmap_t pmap, vm_offset_t va)
+{
+	pml3_entry_t *l3e;
+	pt_entry_t *pte;
+	vm_paddr_t pa;
+
+	l3e = pmap_pml3e(pmap, va);
+	if (__predict_false(l3e == NULL))
+		return (0);
+	if (*l3e & RPTE_LEAF) {
+		pa = (*l3e & PG_PS_FRAME) | (va & L3_PAGE_MASK);
+		pa |= (va & L3_PAGE_MASK);
+	} else {
+		/*
+		 * Beware of a concurrent promotion that changes the
+		 * PDE at this point!  For example, vtopte() must not
+		 * be used to access the PTE because it would use the
+		 * new PDE.  It is, however, safe to use the old PDE
+		 * because the page table page is preserved by the
+		 * promotion.
+		 */
+		pte = pmap_l3e_to_pte(l3e, va);
+		if (__predict_false(pte == NULL))
+			return (0);
+		pa = *pte;
+		pa = (pa & PG_FRAME) | (va & PAGE_MASK);
+		pa |= (va & PAGE_MASK);
+	}
+	return (pa);
+}
+
 VISIBILITY vm_paddr_t
 METHOD(extract) pmap_t pmap, vm_offset_t va)
 {
 
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, pmap, va);
-	UNIMPLEMENTED();
-	return (0);
+	return (mmu_radix_pmap_extract(pmap, va));
 }
 
 VISIBILITY vm_page_t
@@ -4262,6 +4293,7 @@ METHOD(kextract) vm_offset_t va)
 		l3e = *pmap_pml3e(kernel_pmap, va);
 		if (l3e & RPTE_LEAF) {
 			pa = (l3e & PG_PS_FRAME) | (va & L3_PAGE_MASK);
+			pa |= (va & L3_PAGE_MASK);
 		} else {
 			/*
 			 * Beware of a concurrent promotion that changes the
@@ -4273,6 +4305,7 @@ METHOD(kextract) vm_offset_t va)
 			 */
 			pa = *pmap_l3e_to_pte(&l3e, va);
 			pa = (pa & PG_FRAME) | (va & PAGE_MASK);
+			pa |= (va & PAGE_MASK);
 		}
 	}
 	return (pa);
@@ -4353,9 +4386,31 @@ VISIBILITY int
 METHOD(map_user_ptr) pmap_t pm, volatile const void *uaddr, void **kaddr,
     size_t ulen, size_t *klen)
 {
+	vm_offset_t uoff;
+	pt_entry_t *l3e, *pte;
 
+	uoff = (uintptr_t)uaddr;
 	CTR2(KTR_PMAP, "%s(%p)", __func__, uaddr);
-	UNIMPLEMENTED();
+	l3e = pmap_pml3e(pm, uoff);
+
+	if (l3e == NULL || (*l3e & PG_V) == 0)
+		return (EFAULT);
+	*klen = ulen;
+	if (*l3e & RPTE_LEAF) {
+		if ((uoff & L3_PAGE_MASK) + ulen > L3_PAGE_SIZE)
+			panic("%s for page boundary crossing not yet implemented\n", __func__);
+		*kaddr = (void*)PHYS_TO_DMAP((*l3e & PG_FRAME) | (uoff & L3_PAGE_MASK));
+		return (0);
+	}
+	pte = pmap_l3e_to_pte(l3e, uoff);
+	if (pte == NULL || (*pte & PG_V) == 0)
+		return (EFAULT);
+
+	if ((uoff & PAGE_MASK) + ulen > PAGE_SIZE)
+		panic("%s for page boundary crossing not yet implemented\n", __func__);
+
+	*kaddr = (void*)PHYS_TO_DMAP((*pte & PG_FRAME) | (uoff & PAGE_MASK));
+	return (0);
 }
 
 VISIBILITY int
