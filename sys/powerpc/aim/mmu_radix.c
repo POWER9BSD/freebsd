@@ -812,6 +812,17 @@ pmap_pml3e(pmap_t pmap, vm_offset_t va)
 	return (pmap_l2e_to_l3e(l2e, va));
 }
 
+static pt_entry_t *
+pmap_pte(pmap_t pmap, vm_offset_t va)
+{
+	pt_entry_t *l3e;
+
+	l3e = pmap_pml3e(pmap, va);
+	if ((*l3e & RPTE_VALID) == 0)
+		return (NULL);
+	return (pmap_l3e_to_pte(l3e, va));
+}
+
 static __inline void
 pmap_resident_count_inc(pmap_t pmap, int count)
 {
@@ -840,17 +851,6 @@ allocpages(int n)
 	for (int i = 0; i < n; i++)
 		pagezero((void *)PHYS_TO_DMAP(ret + i*PAGE_SIZE));
 	return (ret);
-}
-
-static pt_entry_t *
-vtopte(vm_offset_t va)
-{
-	pt_entry_t *l3e;
-
-	l3e = pmap_pml3e(curpmap, va);
-	if ((*l3e & RPTE_VALID) == 0)
-		return (NULL);
-	return (pmap_l3e_to_pte(l3e, va));
 }
 
 static pt_entry_t *
@@ -2653,7 +2653,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 		pte = &pte[pmap_pte_index(va)];
 	} else {
 		mpte = NULL;
-		pte = vtopte(va);
+		pte = pmap_pte(pmap, va);
 	}
 	if (*pte) {
 		if (mpte != NULL) {
@@ -3443,10 +3443,10 @@ METHOD(qenter) vm_offset_t sva, vm_page_t *ma, int count)
 	uint64_t cache_bits, attr_bits;
 
 	oldpte = 0;
-	pte = vtopte(sva);
+	pte = kvtopte(sva);
 	endpte = pte + count;
 	cache_bits = 0;
-	attr_bits = RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P;
+	attr_bits = RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
 	while (pte < endpte) {
 		m = *ma++;
 #if 0
@@ -3770,12 +3770,6 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	pte_store(l3e, newpde);
 
 	/*
-	 * Invalidate a stale recursive mapping of the page table page.
-	 */
-	if (va >= VM_MAXUSER_ADDRESS)
-		pmap_invalidate_page(pmap, (vm_offset_t)vtopte(va));
-
-	/*
 	 * Demote the PV entry.
 	 */
 	if ((oldpde & PG_MANAGED) != 0)
@@ -3815,11 +3809,6 @@ pmap_remove_kernel_l3e(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va)
 	 * Demote the mapping.
 	 */
 	pte_store(l3e, newpde);
-
-	/*
-	 * Invalidate a stale recursive mapping of the page table page.
-	 */
-	pmap_invalidate_page(pmap, (vm_offset_t)vtopte(va));
 }
 
 /*
