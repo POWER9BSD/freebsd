@@ -2266,14 +2266,15 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	pv_entry_t pv;
 	vm_paddr_t opa, pa;
 	vm_page_t mpte, om;
-	int rv;
+	int rv, retrycount;
 	boolean_t nosleep;
 
-#if 0
+#if 0	
 	printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d)\n", pmap, va,
 	    m, prot, flags, psind);
 #endif
 	va = trunc_page(va);
+	retrycount = 0;
 	CTR6(KTR_PMAP, "pmap_enter(%p, %#lx, %p, %#x, %x, %d)", pmap, va,
 	    m, prot, flags, psind);
 	KASSERT(va <= VM_MAX_KERNEL_ADDRESS, ("pmap_enter: toobig"));
@@ -2318,6 +2319,7 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 		/* Assert the required virtual and physical alignment. */
 		KASSERT((va & L3_PAGE_MASK) == 0, ("pmap_enter: va unaligned"));
 		KASSERT(m->psind > 0, ("pmap_enter: m->psind < psind"));
+		printf("enter_l3e\n");
 		rv = pmap_enter_l3e(pmap, va, newpte | RPTE_LEAF, flags, m, &lock);
 		goto out;
 	}
@@ -2329,12 +2331,12 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	 */
 retry:
 	l3e = pmap_pml3e(pmap, va);
+	printf("demote check\n");
 	if (l3e != NULL && (*l3e & PG_V) != 0 && ((*l3e & RPTE_LEAF) == 0 ||
 	    pmap_demote_l3e_locked(pmap, l3e, va, &lock))) {
 		pte = pmap_l3e_to_pte(l3e, va);
 		if (va < VM_MAXUSER_ADDRESS && mpte == NULL) {
 			mpte = PHYS_TO_VM_PAGE(*l3e & PG_FRAME);
-
 			mpte->wire_count++;
 		}
 	} else if (va < VM_MAXUSER_ADDRESS) {
@@ -2342,6 +2344,7 @@ retry:
 		 * Here if the pte page isn't mapped, or if it has been
 		 * deallocated.
 		 */
+	printf("_pmap_allocpte\n");
 		nosleep = (flags & PMAP_ENTER_NOSLEEP) != 0;
 		mpte = _pmap_allocpte(pmap, pmap_l3e_pindex(va),
 		    nosleep ? NULL : &lock);
@@ -2349,6 +2352,9 @@ retry:
 			rv = KERN_RESOURCE_SHORTAGE;
 			goto out;
 		}
+		printf("retrying after failed _pmap_allopte\n");
+		if (retrycount++ == 6)
+			panic("too many retries");
 		goto retry;
 	} else
 		panic("pmap_enter: invalid page directory va=%#lx", va);
@@ -2507,6 +2513,10 @@ out:
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
+#if 0
+	printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -> returnd %d\n", pmap, va,
+		   m, prot, flags, psind, rv);
+#endif
 	return (rv);
 }
 
@@ -3192,7 +3202,7 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 			vm_wait(NULL);
 			PMAP_LOCK(pmap);
 		}
-
+		printf("page_alloc fail\n");
 		/*
 		 * Indicate the need to retry.  While waiting, the page table
 		 * page may have been allocated.
@@ -3202,99 +3212,106 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 	if ((m->flags & PG_ZERO) == 0)
 		pmap_zero_page(m);
 
+	printf("%s ptepindex=%lx\n", __func__, ptepindex);
 	/*
 	 * Map the pagetable page into the process address space, if
 	 * it isn't already there.
 	 */
 
 	if (ptepindex >= (NUPDE + NUPDPE)) {
-		pml4_entry_t *pml1;
+		pml1_entry_t *l1e;
 		vm_pindex_t pml1index;
 
+		printf("A\n");
 		/* Wire up a new PDPE page */
 		pml1index = ptepindex - (NUPDE + NUPDPE);
-		pml1 = &pmap->pm_pml1[pml1index];
-		*pml1 = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
+		l1e = &pmap->pm_pml1[pml1index];
+		*l1e = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
 
 	} else if (ptepindex >= NUPDE) {
 		vm_pindex_t pml1index;
 		vm_pindex_t pdpindex;
-		pml1_entry_t *pml1;
-		pml2_entry_t *pdp;
+		pml1_entry_t *l1e;
+		pml2_entry_t *l2e;
 
-		/* Wire up a new PDE page */
+		printf("B\n");
+		/* Wire up a new l2e page */
 		pdpindex = ptepindex - NUPDE;
-		pml1index = pdpindex >> RADIX_PGD_INDEX_SHIFT;
+		pml1index = pdpindex >> RPTE_SHIFT;
 
-		pml1 = &pmap->pm_pml1[pml1index];
-		if ((*pml1 & PG_V) == 0) {
+		l1e = &pmap->pm_pml1[pml1index];
+		if ((*l1e & PG_V) == 0) {
 			/* Have to allocate a new pdp, recurse */
 			if (_pmap_allocpte(pmap, NUPDE + NUPDPE + pml1index,
-			    lockp) == NULL) {
+				lockp) == NULL) {
+				printf("next level _pmap_allocpte l2 fail -- #1\n");
 				vm_page_unwire_noq(m);
 				vm_page_free_zero(m);
 				return (NULL);
 			}
 		} else {
-			/* Add reference to pdp page */
-			pdppg = PHYS_TO_VM_PAGE(*pml1 & PG_FRAME);
+			/* Add reference to l2e page */
+			pdppg = PHYS_TO_VM_PAGE(*l1e & PG_FRAME);
 			pdppg->wire_count++;
 		}
-		pdp = (pml2_entry_t *)PHYS_TO_DMAP(*pml1 & PG_FRAME);
+		l2e = (pml2_entry_t *)PHYS_TO_DMAP(*l1e & PG_FRAME);
 
 		/* Now find the pdp page */
-		pdp = &pdp[pdpindex & ((1ul << RPTE_SHIFT) - 1)];
-		*pdp = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
+		l2e = &l2e[pdpindex & RPTE_MASK];
+		*l2e = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
 
 	} else {
 		vm_pindex_t pml1index;
 		vm_pindex_t pdpindex;
-		pml1_entry_t *pml1;
-		pml2_entry_t *pdp;
-		pml3_entry_t *pd;
+		pml1_entry_t *l1e;
+		pml2_entry_t *l2e;
+		pml3_entry_t *l3e;
 
+		printf("C\n");
 		/* Wire up a new PTE page */
 		pdpindex = ptepindex >> RPTE_SHIFT;
-		pml1index = pdpindex >> RADIX_PGD_INDEX_SHIFT;
+		pml1index = pdpindex >> RPTE_SHIFT;
 
 		/* First, find the pdp and check that its valid. */
-		pml1 = &pmap->pm_pml1[pml1index];
-		if ((*pml1 & PG_V) == 0) {
+		l1e = &pmap->pm_pml1[pml1index];
+		if ((*l1e & PG_V) == 0) {
 			/* Have to allocate a new pd, recurse */
 			if (_pmap_allocpte(pmap, NUPDE + pdpindex,
 			    lockp) == NULL) {
+				printf("next level _pmap_allocpte l2 fail\n");
 				vm_page_unwire_noq(m);
 				vm_page_free_zero(m);
 				return (NULL);
 			}
-			pdp = (pml2_entry_t *)PHYS_TO_DMAP(*pml1 & PG_FRAME);
-			pdp = &pdp[pdpindex & ((1ul << RPTE_SHIFT) - 1)];
+			l2e = (pml2_entry_t *)PHYS_TO_DMAP(*l1e & PG_FRAME);
+			l2e = &l2e[pdpindex & RPTE_MASK];
 		} else {
-			pdp = (pml2_entry_t *)PHYS_TO_DMAP(*pml1 & PG_FRAME);
-			pdp = &pdp[pdpindex & ((1ul << RPTE_SHIFT) - 1)];
-			if ((*pdp & PG_V) == 0) {
+			l2e = (pml2_entry_t *)PHYS_TO_DMAP(*l1e & PG_FRAME);
+			l2e = &l2e[pdpindex & RPTE_MASK];
+			if ((*l2e & PG_V) == 0) {
 				/* Have to allocate a new pd, recurse */
 				if (_pmap_allocpte(pmap, NUPDE + pdpindex,
 				    lockp) == NULL) {
+					printf("next level _pmap_allocpte l3 fail\n");
 					vm_page_unwire_noq(m);
 					vm_page_free_zero(m);
 					return (NULL);
 				}
 			} else {
 				/* Add reference to the pd page */
-				pdpg = PHYS_TO_VM_PAGE(*pdp & PG_FRAME);
+				pdpg = PHYS_TO_VM_PAGE(*l2e & PG_FRAME);
 				pdpg->wire_count++;
 			}
 		}
-		pd = (pml3_entry_t *)PHYS_TO_DMAP(*pdp & PG_FRAME);
+		l3e = (pml3_entry_t *)PHYS_TO_DMAP(*l2e & PG_FRAME);
 
 		/* Now we know where the page directory page is */
-		pd = &pd[ptepindex & ((1ul << RPTE_SHIFT) - 1)];
-		*pd = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
+		l3e = &l3e[ptepindex & RPTE_MASK];
+		*l3e = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
 	}
 
 	pmap_resident_count_inc(pmap, 1);
-
+	printf("return m\n");
 	return (m);
 }
 static vm_page_t
