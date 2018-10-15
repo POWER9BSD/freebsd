@@ -52,13 +52,13 @@
 .macro VALIDATE_ADDR_COPY raddr
 	srdi  %r0, \raddr, 62
 	cmpwi %r0, 3
-	bge	copy_fault
+	bge-	copy_fault
 .endm
 
 .macro VALIDATE_ADDR_FUSU raddr
 	srdi  %r0, \raddr, 62
 	cmpwi %r0, 3
-	bge	fusufault
+	bge-	fusufault
 .endm
 	
 #define PCPU(reg) mfsprg  reg, 0	
@@ -299,7 +299,7 @@ ENTRY(copyinstr)
 	
 	addi	%r3, %r3, 1
 	addi	%r4, %r4, 1
-	bdnz	0b
+	bdnz+	0b
 1:
 	std	%r8, 0(%r6)
 	li	%r3, 0
