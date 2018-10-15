@@ -201,7 +201,7 @@ trap(struct trapframe *frame)
 #ifdef KDTRACE_HOOKS
 	uint32_t inst;
 #endif
-	int		sig, type, user;
+	int		sig, type, user, rv;
 	u_int		ucode;
 	ksiginfo_t	ksi;
 	register_t 	fscr;
@@ -269,7 +269,11 @@ trap(struct trapframe *frame)
 #endif
 		case EXC_DSI:
 		case EXC_ISI:
+			if (td->td_pflags & TDP_UNUSED9)
+				trap_fatal(frame);
+			td->td_pflags |= TDP_UNUSED9;
 			sig = trap_pfault(frame, 1);
+			td->td_pflags &= ~TDP_UNUSED9;
 			if (sig == SIGSEGV)
 				ucode = SEGV_MAPERR;
 			break;
@@ -419,8 +423,14 @@ trap(struct trapframe *frame)
 			break;
 #endif
 		case EXC_DSI:
-			if (trap_pfault(frame, 0) == 0)
+			if (td->td_pflags & TDP_UNUSED9)
+				trap_fatal(frame);
+			td->td_pflags |= TDP_UNUSED9;
+			rv = trap_pfault(frame, 0);
+			td->td_pflags &= ~TDP_UNUSED9;
+			if (rv == 0)
  				return;
+
 			break;
 		case EXC_MCHK:
 			if (handle_onfault(frame))
@@ -539,6 +549,9 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 	printf("\n");
 }
 
+extern int copy_fault(void);
+extern int fusufault(void);
+
 /*
  * Handles a fatal fault when we have onfault state to recover.  Returns
  * non-zero if there was onfault recovery state available.
@@ -546,15 +559,23 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 static int
 handle_onfault(struct trapframe *frame)
 {
-	struct		thread *td;
+	uint64_t dispatch;
 
-	td = curthread;
-	if (td->td_pcb->pcb_onfault != NULL) {
-		frame->srr0 = (uintptr_t)td->td_pcb->pcb_onfault;
-		td->td_pcb->pcb_onfault = NULL; /* Returns twice, not thrice */
-		return (1);
+	dispatch = (uintptr_t)curthread->td_pcb->pcb_onfault;
+	if (__predict_true(dispatch == 0))
+		return (0);
+	switch (dispatch) {
+		case 1:
+			frame->srr0 = (uintptr_t)copy_fault;
+			break;
+		case 2:
+			frame->srr0 = (uintptr_t)fusufault;
+			break;
+		default:
+			panic("unrecognized fault code %lx\n", dispatch);
 	}
-	return (0);
+	return (1);
+
 }
 
 int
@@ -781,7 +802,9 @@ trap_pfault(struct trapframe *frame, int user)
 		else
 			ftype = VM_PROT_READ;
 	}
-
+	printf("%s user=%d ftype=%x eva=%lx\n",
+		   __func__, user, ftype, eva);
+	
 	if (user) {
 		KASSERT(p->p_vmspace != NULL, ("trap_pfault: vmspace  NULL"));
 		map = &p->p_vmspace->vm_map;
@@ -806,6 +829,7 @@ trap_pfault(struct trapframe *frame, int user)
 	if (rv == KERN_SUCCESS)
 		return (0);
 
+	printf("%s vm_fault=>rv = %d\n", __func__, rv);
 	if (!user && handle_onfault(frame))
 		return (0);
 
