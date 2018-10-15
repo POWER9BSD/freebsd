@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/syslog.h>
 #include <sys/msgbuf.h>
 #include <sys/malloc.h>
+#include <sys/mman.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
@@ -1932,9 +1933,113 @@ mmu_radix_proctab_init(void)
 }
 
 VISIBILITY void
-METHOD(advise) pmap_t pmap, vm_offset_t start, vm_offset_t end, int advice)
+METHOD(advise) pmap_t pmap, vm_offset_t sva, vm_offset_t eva, int advice)
 {
-	UNIMPLEMENTED();
+	struct rwlock *lock;
+	pml1_entry_t *l1e;
+	pml2_entry_t *l2e;
+	pml3_entry_t oldl3e, *l3e;
+	pt_entry_t *pte;
+	vm_offset_t va, va_next;
+	vm_page_t m;
+	boolean_t anychanged;
+
+	if (advice != MADV_DONTNEED && advice != MADV_FREE)
+		return;
+	anychanged = FALSE;
+	pmap_delayed_invl_started();
+	PMAP_LOCK(pmap);
+	for (; sva < eva; sva = va_next) {
+		l1e = pmap_pml1e(pmap, sva);
+		if ((*l1e & PG_V) == 0) {
+			va_next = (sva + L1_PAGE_SIZE) & ~L1_PAGE_MASK;
+			if (va_next < sva)
+				va_next = eva;
+			continue;
+		}
+		l2e = pmap_l1e_to_l2e(l1e, sva);
+		if ((*l2e & PG_V) == 0) {
+			va_next = (sva + L2_PAGE_SIZE) & ~L2_PAGE_MASK;
+			if (va_next < sva)
+				va_next = eva;
+			continue;
+		}
+		va_next = (sva + L3_PAGE_SIZE) & ~L3_PAGE_MASK;
+		if (va_next < sva)
+			va_next = eva;
+		l3e = pmap_l2e_to_l3e(l2e, sva);
+		oldl3e = *l3e;
+		if ((oldl3e & PG_V) == 0)
+			continue;
+		else if ((oldl3e & RPTE_LEAF) != 0) {
+			if ((oldl3e & PG_MANAGED) == 0)
+				continue;
+			lock = NULL;
+			if (!pmap_demote_l3e_locked(pmap, l3e, sva, &lock)) {
+				if (lock != NULL)
+					rw_wunlock(lock);
+
+				/*
+				 * The large page mapping was destroyed.
+				 */
+				continue;
+			}
+
+			/*
+			 * Unless the page mappings are wired, remove the
+			 * mapping to a single page so that a subsequent
+			 * access may repromote.  Since the underlying page
+			 * table page is fully populated, this removal never
+			 * frees a page table page.
+			 */
+			if ((oldl3e & PG_W) == 0) {
+				pte = pmap_l3e_to_pte(l3e, sva);
+				KASSERT((*pte & PG_V) != 0,
+				    ("pmap_advise: invalid PTE"));
+				pmap_remove_pte(pmap, pte, sva, *l3e, NULL,
+				    &lock);
+				anychanged = TRUE;
+			}
+			if (lock != NULL)
+				rw_wunlock(lock);
+		}
+		if (va_next > eva)
+			va_next = eva;
+		va = va_next;
+		for (pte = pmap_l3e_to_pte(l3e, sva); sva != va_next; pte++,
+		    sva += PAGE_SIZE) {
+			if ((*pte & (PG_MANAGED | PG_V)) != (PG_MANAGED | PG_V))
+				goto maybe_invlrng;
+			else if ((*pte & (PG_M | PG_RW)) == (PG_M | PG_RW)) {
+				if (advice == MADV_DONTNEED) {
+					/*
+					 * Future calls to pmap_is_modified()
+					 * can be avoided by making the page
+					 * dirty now.
+					 */
+					m = PHYS_TO_VM_PAGE(*pte & PG_FRAME);
+					vm_page_dirty(m);
+				}
+				atomic_clear_long(pte, PG_M | PG_A);
+			} else if ((*pte & PG_A) != 0)
+				atomic_clear_long(pte, PG_A);
+			else
+				goto maybe_invlrng;
+			anychanged = TRUE;
+			continue;
+maybe_invlrng:
+			if (va != va_next) {
+				pmap_invalidate_range(pmap, va, sva);
+				va = va_next;
+			}
+		}
+		if (va != va_next)
+			pmap_invalidate_range(pmap, va, sva);
+	}
+	if (anychanged)
+		pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
+	pmap_delayed_invl_finished();
 }
 
 /*
