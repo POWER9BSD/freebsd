@@ -655,14 +655,6 @@ cnttzd(uint64_t word)
 	return (int)result;
 }
 
-static __inline void
-pagezero(void *page)
-{
-	/* XXX optimize me */
-	memset(page, 0, PAGE_SIZE);
-}
-
-
 #if 0
 static __inline int
 ffsl(uint64_t word)
