@@ -91,7 +91,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_ddb.h"
 #ifdef DDB
-static void pmap_pte_walk(pmap_t pmap, vm_offset_t va);
+static void pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va);
 #endif
 
 
@@ -2276,9 +2276,17 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 
 #ifdef INVARIANTS
 	if (pmap != kernel_pmap) {
+		uint64_t pid;
+		pml1_entry_t *l1;
+
 		printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- pid=%lu\n", pmap, va,
 			   m, prot, flags, psind, pmap->pm_pid);
-		pmap_pte_walk(pmap, va);
+		pmap_pte_walk(pmap->pm_pml1, va);
+		pid = mfspr(SPR_PID);
+		l1 = (pml1_entry_t *)PHYS_TO_DMAP(isa3_proctab[pid].proctab0 & PG_FRAME);
+		printf("actual: pid: %lx proctab0: %lx l1: %p pmapl1: %p \n", pid,
+			   isa3_proctab[pid].proctab0, l1, pmap->pm_pml1);
+		pmap_pte_walk(l1, va);
 	}
 #endif
 	va = trunc_page(va);
@@ -2301,6 +2309,7 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 		newpte |= PG_RW;
 	KASSERT((newpte & (PG_M | PG_RW)) != PG_M,
 	    ("pmap_enter: flags includes VM_PROT_WRITE but prot doesn't"));
+
 	if (prot & VM_PROT_EXECUTE)
 		newpte |= PG_X;
 	if ((flags & PMAP_ENTER_WIRED) != 0)
@@ -2351,7 +2360,6 @@ retry:
 		 * Here if the pte page isn't mapped, or if it has been
 		 * deallocated.
 		 */
-	printf("_pmap_allocpte\n");
 		nosleep = (flags & PMAP_ENTER_NOSLEEP) != 0;
 		mpte = _pmap_allocpte(pmap, pmap_l3e_pindex(va),
 		    nosleep ? NULL : &lock);
@@ -2359,7 +2367,7 @@ retry:
 			rv = KERN_RESOURCE_SHORTAGE;
 			goto out;
 		}
-		printf("retrying after failed _pmap_allopte\n");
+		printf("retrying after _pmap_allocpte\n");
 		if (retrycount++ == 6)
 			panic("too many retries");
 		goto retry;
@@ -3159,7 +3167,7 @@ mmu_radix_pmap_pinit(pmap_t pmap)
 	pmap->pm_pml1 = uma_zalloc(zone_radix_pgd, M_WAITOK);
 
 	for (int j = 0; j <  RADIX_PGD_SIZE/PAGE_SIZE; j++)
-			pagezero(pmap->pm_pml1 + j*PAGE_SIZE);
+		pagezero(pmap->pm_pml1 + j*PAGE_SIZE);
 	pmap->pm_root.rt_root = 0;
 	TAILQ_INIT(&pmap->pm_pvchunk);
 	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
@@ -3171,7 +3179,7 @@ mmu_radix_pmap_pinit(pmap_t pmap)
 	}
 	printf("allocated pid=%lu\n", pid);
 	pmap->pm_pid = pid;
-	l1pa = DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1);
+	l1pa = DMAP_TO_PHYS((vm_offset_t)pmap->pm_pml1);
 	isa3_proctab[pid].proctab0 = htobe64(RTS_SIZE |  l1pa | RADIX_PGD_INDEX_SHIFT);
 	__asm __volatile("ptesync;isync" : : : "memory");
 	return (1);
@@ -3333,7 +3341,6 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 	}
 
 	pmap_resident_count_inc(pmap, 1);
-	printf("return m\n");
 	return (m);
 }
 static vm_page_t
@@ -4676,15 +4683,14 @@ pmap_is_valid_memattr(pmap_t pmap __unused, vm_memattr_t mode)
 #include <ddb/ddb.h>
 
 static void
-pmap_pte_walk(pmap_t pmap, vm_offset_t va)
+pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va)
 {
 	pml1_entry_t *l1e;
 	pml2_entry_t *l2e;
 	pml3_entry_t *l3e;
 	pt_entry_t *pte;
-	uint64_t pid;
 
-	l1e = pmap_pml1e(pmap, va);
+	l1e = &l1[pmap_pml1e_index(va)];
 	db_printf("VA %#016lx l1e %#016lx", va, *l1e);
 	if ((*l1e & PG_V) == 0) {
 		db_printf("\n");
@@ -4703,10 +4709,8 @@ pmap_pte_walk(pmap_t pmap, vm_offset_t va)
 		return;
 	}
 	pte = pmap_l3e_to_pte(l3e, va);
-	pid = mfspr(SPR_PID);
-	db_printf(" pte %#016lx pm_pid %lx pid %lx addr %p\n", *pte,
-			  pmap->pm_pid, pid, 
-			  &isa3_proctab[pmap->pm_pid]);
+	db_printf(" pte %#016lx pm_pid %lx\n", *pte,
+			  mfspr(SPR_PID));
 }
 
 DB_SHOW_COMMAND(pte, pmap_print_pte)
@@ -4725,6 +4729,6 @@ DB_SHOW_COMMAND(pte, pmap_print_pte)
 	else
 		pmap = PCPU_GET(curpmap);
 
-	pmap_pte_walk(pmap, va);
+	pmap_pte_walk(pmap->pm_pml1, va);
 }
 #endif
