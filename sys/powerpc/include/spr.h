@@ -33,7 +33,7 @@
 
 #ifndef _LOCORE
 #define	mtspr(reg, val)							\
-	__asm __volatile("mtspr %0,%1" : : "K"(reg), "r"(val))
+	__asm __volatile("mtspr %0,%1" : : "K"(reg), "r"((unsigned long)val))
 #define	mfspr(reg)							\
 	( { register_t val;						\
 	  __asm __volatile("mfspr %0,%1" : "=r"(val) : "K"(reg));	\
@@ -90,6 +90,12 @@
  * architectures the SPR is valid on - 4 for 4xx series,
  * 6 for 6xx/7xx series and 8 for 8xx and 8xxx series.
  */
+
+#ifdef CONFIG_40X
+#define	SPR_PID			0x3b1	/* 4.. Process ID */
+#else
+#define	SPR_PID			0x30	/* 4.. Process ID */
+#endif
 
 #define	SPR_MQ			0x000	/* .6. 601 MQ register */
 #define	SPR_XER			0x001	/* 468 Fixed Point Exception Register */
@@ -429,7 +435,7 @@
 #define	SPR_MMCR2		0x3b0	/* .6. Monitor Mode Control Register 2 */
 #define	  SPR_MMCR2_THRESHMULT_32	  0x80000000 /* Multiply MMCR0 threshold by 32 */
 #define	  SPR_MMCR2_THRESHMULT_2	  0x00000000 /* Multiply MMCR0 threshold by 2 */
-#define	SPR_PID			0x3b1	/* 4.. Process ID */
+
 #define	SPR_PMC5		0x3b1	/* .6. Performance Counter Register 5 */
 #define	SPR_PMC6		0x3b2	/* .6. Performance Counter Register 6 */
 #define	SPR_CCR0		0x3b3	/* 4.. Core Configuration Register 0 */

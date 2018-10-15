@@ -174,8 +174,8 @@ struct pmap {
 			pml1_entry_t	*pm_pml1;	/* KVA of root page directory */
 			struct vm_radix		pm_root;	/* spare page table pages */
 			TAILQ_HEAD(,pv_chunk)	pm_pvchunk;	/* list of mappings in pmap */
+			uint64_t	pm_pid; /* PIDR value */
 			int pm_flags;
-			uint32_t	pm_pid; /* PIDR value */
 		};
 	};
 #else
