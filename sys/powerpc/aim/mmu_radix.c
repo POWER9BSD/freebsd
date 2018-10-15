@@ -795,7 +795,7 @@ pmap_pml2e(pmap_t pmap, vm_offset_t va)
 	pt_entry_t *l1e;
 
 	l1e = pmap_pml1e(pmap, va);
-	if ((*l1e & RPTE_VALID) == 0)
+	if (l1e == NULL || (*l1e & RPTE_VALID) == 0)
 		return (NULL);
 	return (pmap_l1e_to_l2e(l1e, va));
 }
@@ -806,7 +806,7 @@ pmap_pml3e(pmap_t pmap, vm_offset_t va)
 	pt_entry_t *l2e;
 
 	l2e = pmap_pml2e(pmap, va);
-	if ((*l2e & RPTE_VALID) == 0)
+	if (l2e == NULL || (*l2e & RPTE_VALID) == 0)
 		return (NULL);
 	return (pmap_l2e_to_l3e(l2e, va));
 }
@@ -817,7 +817,7 @@ pmap_pte(pmap_t pmap, vm_offset_t va)
 	pt_entry_t *l3e;
 
 	l3e = pmap_pml3e(pmap, va);
-	if ((*l3e & RPTE_VALID) == 0)
+	if (l3e == NULL || (*l3e & RPTE_VALID) == 0)
 		return (NULL);
 	return (pmap_l3e_to_pte(l3e, va));
 }
@@ -2273,20 +2273,11 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	int rv, retrycount;
 	boolean_t nosleep;
 
-
 #ifdef INVARIANTS
 	if (pmap != kernel_pmap) {
-		uint64_t pid;
-		pml1_entry_t *l1;
-
 		printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- pid=%lu\n", pmap, va,
 			   m, prot, flags, psind, pmap->pm_pid);
 		pmap_pte_walk(pmap->pm_pml1, va);
-		pid = mfspr(SPR_PID);
-		l1 = (pml1_entry_t *)PHYS_TO_DMAP(isa3_proctab[pid].proctab0 & PG_FRAME);
-		printf("actual: pid: %lx proctab0: %lx l1: %p pmapl1: %p \n", pid,
-			   isa3_proctab[pid].proctab0, l1, pmap->pm_pml1);
-		pmap_pte_walk(l1, va);
 	}
 #endif
 	va = trunc_page(va);
@@ -2338,6 +2329,7 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 		KASSERT(m->psind > 0, ("pmap_enter: m->psind < psind"));
 		printf("enter_l3e\n");
 		rv = pmap_enter_l3e(pmap, va, newpte | RPTE_LEAF, flags, m, &lock);
+		printf("enter_l3e rv=%d\n", rv);
 		goto out;
 	}
 	mpte = NULL;
@@ -2365,6 +2357,8 @@ retry:
 		    nosleep ? NULL : &lock);
 		if (mpte == NULL && nosleep) {
 			rv = KERN_RESOURCE_SHORTAGE;
+			printf("KERN_RESOURCE_SHORTAGE\n");
+
 			goto out;
 		}
 		printf("retrying after _pmap_allocpte\n");
@@ -2528,10 +2522,10 @@ out:
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
-#if 0
-	printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -> returnd %d\n", pmap, va,
-		   m, prot, flags, psind, rv);
-#endif
+
+	if (pmap != kernel_pmap)
+		printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -> returned %d\n", pmap, va,
+			   m, prot, flags, psind, rv);
 	return (rv);
 }
 
