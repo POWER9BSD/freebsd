@@ -70,21 +70,17 @@
 .macro SET_COPYFAULT raddr rpcb
 	VALIDATE_ADDR_COPY \raddr
 	PCPU(%r6)
-	addis  %r9, %r2,copy_fault@got@ha
-	ld  %r9, copy_fault@got@l(%r9)
-	ld  %r0, 0(%r9)
+	li %r0, 1
 	ld  \rpcb, PC_CURPCB(%r6)
-	std %r0, PCB_ONFAULT(\rpcb)	
+	std %r0, PCB_ONFAULT(\rpcb)
 .endm
 
 .macro SET_FUSUFAULT raddr rpcb
 	VALIDATE_ADDR_FUSU \raddr
 	PCPU(%r6)
-	addis  %r9, %r2,fusufault@got@ha
-	ld  %r9, fusufault@got@l(%r9)
-	ld  %r0, 0(%r9)
+	li  %r0, 2
 	ld  \rpcb, PC_CURPCB(%r6)
-	std %r0, PCB_ONFAULT(\rpcb)	
+	std %r0, PCB_ONFAULT(\rpcb)
 .endm
 
 .macro CLEAR_FAULT rpcb
@@ -416,13 +412,13 @@ ENTRY(casueword64)
 	EPILOGUE	
 #endif
 	
-fusufault:
+ENTRY(fusufault)
 	CLEAR_FAULT rpcb=%r7
 	li %r3, -1
 	EPILOGUE
 	blr
 
-copy_fault:
+ENTRY(copy_fault)
 	CLEAR_FAULT rpcb=%r7
 	li %r3, EFAULT
 	EPILOGUE
