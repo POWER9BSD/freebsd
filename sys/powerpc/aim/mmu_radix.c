@@ -1596,7 +1596,6 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 
 	bzero(kernel_pmap, sizeof(struct pmap));
 	PMAP_LOCK_INIT(kernel_pmap);
-	CPU_FILL(&kernel_pmap->pm_active);
 
 	ptpages = allocpages(2);
 	memset((void*)PHYS_TO_DMAP(ptpages), 0, 2*PAGE_SIZE);
@@ -2331,7 +2330,6 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	 */
 retry:
 	l3e = pmap_pml3e(pmap, va);
-	printf("demote check\n");
 	if (l3e != NULL && (*l3e & PG_V) != 0 && ((*l3e & RPTE_LEAF) == 0 ||
 	    pmap_demote_l3e_locked(pmap, l3e, va, &lock))) {
 		pte = pmap_l3e_to_pte(l3e, va);
@@ -3148,7 +3146,6 @@ mmu_radix_pmap_pinit(pmap_t pmap)
 	for (int j = 0; j <  RADIX_PGD_SIZE/PAGE_SIZE; j++)
 			pagezero(pmap->pm_pml1 + j*PAGE_SIZE);
 	pmap->pm_root.rt_root = 0;
-	CPU_ZERO(&pmap->pm_active);
 	TAILQ_INIT(&pmap->pm_pvchunk);
 	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
 	pmap->pm_flags = PMAP_PDE_SUPERPAGE;
@@ -3397,7 +3394,6 @@ METHOD(pinit0) pmap_t pmap)
 	pmap->pm_pml1 = kernel_pmap->pm_pml1;
 	pmap->pm_pid = kernel_pmap->pm_pid;
 	pmap->pm_root.rt_root = 0;
-	CPU_ZERO(&pmap->pm_active);
 	TAILQ_INIT(&pmap->pm_pvchunk);
 	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
 	pmap->pm_flags = PMAP_PDE_SUPERPAGE;
