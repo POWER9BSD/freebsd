@@ -164,24 +164,24 @@ struct pmap {
 		struct {
 			struct slbtnode	*pm_slb_tree_root;
 			struct slb	**pm_slb;
-			int		pm_slb_len;
 			struct pvo_tree pmap_pvo;
 			struct pmap	*pmap_phys;
+			cpuset_t	pm_active;
+			int		pm_slb_len;
 		};
 		/* Radix support */
 		struct {
-			uint64_t	pm_pid; /* PIDR value */
 			pml1_entry_t	*pm_pml1;	/* KVA of root page directory */
 			struct vm_radix		pm_root;	/* spare page table pages */
 			TAILQ_HEAD(,pv_chunk)	pm_pvchunk;	/* list of mappings in pmap */
 			int pm_flags;
+			uint32_t	pm_pid; /* PIDR value */
 		};
 	};
 #else
 	register_t	pm_sr[16];
 #endif
 	struct		pmap_statistics	pm_stats;
-	cpuset_t	pm_active;
 };
 
 typedef struct pv_entry {
