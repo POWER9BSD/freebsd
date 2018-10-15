@@ -42,6 +42,7 @@ struct pvo_entry;
 
 #define	PCPU_MD_COMMON_FIELDS						\
 	int		pc_inside_intr;					\
+	uint32_t    pc_asid;							\
 	struct pmap	*pc_curpmap;		/* current pmap */	\
 	struct thread	*pc_fputhread;		/* current fpu user */  \
 	struct thread	*pc_vecthread;		/* current vec user */  \
@@ -61,7 +62,7 @@ struct pvo_entry;
 	struct mtx	qmap_lock;					\
 	char		__pad[128];
 
-#define PCPU_MD_AIM64_FIELDS						\
+#define PCPU_MD_AIM64_FIELDS					\
 	struct slb	slb[64];					\
 	struct slb	**userslb;					\
 	register_t	slbsave[18];					\
