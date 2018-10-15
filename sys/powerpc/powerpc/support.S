@@ -48,10 +48,23 @@
 	ld	%r0, 16(%r1)
 	mtlr	%r0
 .endm
+
+.macro VALIDATE_ADDR_COPY raddr
+	srdi  %r0, \raddr, 62
+	cmpwi %r0, 3
+	bge	copy_fault
+.endm
+
+.macro VALIDATE_ADDR_FUSU raddr
+	srdi  %r0, \raddr, 62
+	cmpwi %r0, 3
+	bge	fusufault
+.endm
 	
 #define PCPU(reg) mfsprg  reg, 0	
 
-.macro SET_COPYFAULT rpcb
+.macro SET_COPYFAULT raddr rpcb
+	VALIDATE_ADDR_COPY \raddr
 	PCPU(%r6)
 	ld  %r9, copy_fault@got(%r2)
 	ld  %r0, 0(%r9)
@@ -59,7 +72,8 @@
 	std %r0, PCB_ONFAULT(\rpcb)	
 .endm
 
-.macro SET_FUSUFAULT rpcb
+.macro SET_FUSUFAULT raddr rpcb
+	VALIDATE_ADDR_FUSU \raddr
 	PCPU(%r6)
 	ld  %r9, fusufault@got(%r2)
 	ld  %r0, 0(%r9)
@@ -67,12 +81,11 @@
 	std %r0, PCB_ONFAULT(\rpcb)	
 .endm
 
-	
 .macro CLEAR_FAULT rpcb
 	li  %r0, 0
 	std %r0, PCB_ONFAULT(\rpcb)
 .endm
-	
+
 /*
 
  *  bcopy(src, dst, len)
@@ -250,14 +263,14 @@ ENTRY(pagezero)
  */
 ENTRY(copyout)
 	PROLOGUE	
-	SET_COPYFAULT rpcb=%r7
+	SET_COPYFAULT raddr=%r4 rpcb=%r7
 	bl bcopy_generic 
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
 
 ENTRY(copyin)
 	PROLOGUE	
-	SET_COPYFAULT rpcb=%r7
+	SET_COPYFAULT raddr=%r3 rpcb=%r7
 	bl bcopy_generic
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
@@ -269,7 +282,7 @@ ENTRY(copyin)
 	
 ENTRY(copyinstr)
 	PROLOGUE	
-	SET_COPYFAULT rpcb=%r7
+	SET_COPYFAULT raddr=%r3 rpcb=%r7
 	li	%r8, 0
 	cmplwi	0, %r5, 0
 	beq	1f
@@ -295,8 +308,8 @@ ENTRY(copyinstr)
 
 
 ENTRY(subyte)
-	PROLOGUE	
-	SET_FUSUFAULT rpcb=%r7
+	PROLOGUE
+	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	stb  %r4, 0(%r3)
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
@@ -306,7 +319,7 @@ ENTRY(suword)
 #endif	
 ENTRY(suword32)
 	PROLOGUE
-	SET_FUSUFAULT rpcb=%r7
+	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	stw  %r4, 0(%r3)
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
@@ -315,7 +328,7 @@ ENTRY(suword32)
 ENTRY(suword)
 ENTRY(suword64)
 	PROLOGUE	
-	SET_FUSUFAULT rpcb=%r7
+	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	std  %r4, 0(%r3) 
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
@@ -323,14 +336,14 @@ ENTRY(suword64)
 	
 ENTRY(fubyte)
 	PROLOGUE	
-	SET_FUSUFAULT rpcb=%r7
+	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	lbz %r3, 0(%r3)
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
 
 ENTRY(fuword16)
 	PROLOGUE	
-	SET_FUSUFAULT rpcb=%r7
+	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	lhz %r3, 0(%r3)
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
@@ -341,7 +354,7 @@ ENTRY(fueword)
 #endif	
 ENTRY(fueword32)
 	PROLOGUE	
-	SET_FUSUFAULT rpcb=%r7
+	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	lwz  %r3, 0(%r3) 
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
@@ -350,7 +363,7 @@ ENTRY(fueword32)
 ENTRY(fueword)	
 ENTRY(fueword64)
 	PROLOGUE	
-	SET_FUSUFAULT rpcb=%r7
+	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	ld %r3, 0(%r3)
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE	
@@ -361,7 +374,7 @@ ENTRY(casueword)
 #endif	
 ENTRY(casueword32)
 	PROLOGUE	
-	SET_FUSUFAULT rpcb=%r7
+	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 1:
 	lwarx %r0, 0, %r3
 	cmplw %r4, %r0
@@ -380,7 +393,7 @@ ENTRY(casueword32)
 ENTRY(casueword)
 ENTRY(casueword64)
 	PROLOGUE	
-	SET_FUSUFAULT rpcb=%r7
+	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 1:
 	ldarx %r0, 0, %r3
 	cmpld %r4, %r0
