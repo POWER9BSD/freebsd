@@ -81,7 +81,7 @@
 	VALIDATE_ADDR_FUSU \raddr
 	PCPU(%r6)
 	addis  %r9, %r2,fusufault@got@ha
-	ld  %r9, copy_fault@got@l(%r9)
+	ld  %r9, fusufault@got@l(%r9)
 	ld  %r0, 0(%r9)
 	ld  \rpcb, PC_CURPCB(%r6)
 	std %r0, PCB_ONFAULT(\rpcb)	
