@@ -547,18 +547,10 @@ static int
 handle_onfault(struct trapframe *frame)
 {
 	struct		thread *td;
-	jmp_buf		*fb;
 
 	td = curthread;
-	fb = td->td_pcb->pcb_onfault;
-	if (fb != NULL) {
-		frame->srr0 = (*fb)->_jb[FAULTBUF_LR];
-		frame->fixreg[1] = (*fb)->_jb[FAULTBUF_R1];
-		frame->fixreg[2] = (*fb)->_jb[FAULTBUF_R2];
-		frame->fixreg[3] = 1;
-		frame->cr = (*fb)->_jb[FAULTBUF_CR];
-		bcopy(&(*fb)->_jb[FAULTBUF_R14], &frame->fixreg[14],
-		    18 * sizeof(register_t));
+	if (td->td_pcb->pcb_onfault != NULL) {
+		frame->srr0 = (uintptr_t)td->td_pcb->pcb_onfault;
 		td->td_pcb->pcb_onfault = NULL; /* Returns twice, not thrice */
 		return (1);
 	}
