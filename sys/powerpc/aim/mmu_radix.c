@@ -32,6 +32,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
+#include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/bitstring.h>
 #include <sys/queue.h>
@@ -87,6 +88,12 @@ __FBSDID("$FreeBSD$");
 #ifdef INVARIANTS
 #include <vm/uma_dbg.h>
 #endif
+
+#include "opt_ddb.h"
+#ifdef DDB
+static void pmap_pte_walk(pmap_t pmap, vm_offset_t va);
+#endif
+
 
 /*
  *
@@ -318,9 +325,6 @@ static void mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr
 #define	PMAP_ENTER_NORECLAIM	0x1000000	/* Don't reclaim PV entries. */
 #define	PMAP_ENTER_NOREPLACE	0x2000000	/* Don't replace mappings. */
 
-#define	curpmap		PCPU_GET(curpmap)
-
-
 #define UNIMPLEMENTED() panic("%s not implemented", __func__)
 
 #define RIC_FLUSH_TLB 0
@@ -381,6 +385,7 @@ static u_int	phys_avail_count;
 static int	regions_sz, pregions_sz;
 static struct pate *isa3_parttab;
 static struct prte *isa3_proctab;
+static vmem_t *asid_arena;
 
 extern void bs_remap_earlyboot(void);
 
@@ -556,6 +561,7 @@ mmu_radix_init_iamr(void)
 static void
 mmu_radix_pid_set(pmap_t pmap)
 {
+
 	mtspr(SPR_PID, pmap->pm_pid);
 	isync();
 }
@@ -1598,12 +1604,12 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 	PMAP_LOCK_INIT(kernel_pmap);
 
 	ptpages = allocpages(2);
-	memset((void*)PHYS_TO_DMAP(ptpages), 0, 2*PAGE_SIZE);
 	l1phys = moea64_bootstrap_alloc(RADIX_PGD_SIZE, RADIX_PGD_SIZE);
 	printf("l1phys=%lx\n", l1phys);
 	MPASS((l1phys & (RADIX_PGD_SIZE-1)) == 0);
+	for (int i = 0; i < RADIX_PGD_SIZE/PAGE_SIZE; i++)
+		pagezero((void*)PHYS_TO_DMAP(parttab_phys + i*PAGE_SIZE));
 	kernel_pmap->pm_pml1 = (pml1_entry_t *)PHYS_TO_DMAP(l1phys);
-	memset(kernel_pmap->pm_pml1, 0, RADIX_PGD_SIZE);
 
 	mmu_radix_dmap_populate(hwphyssz);
 
@@ -1766,9 +1772,13 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	if (isa3_pid_bits == 0)
 		isa3_pid_bits = 20;
 	parttab_phys = moea64_bootstrap_alloc(PARTTAB_SIZE, PARTTAB_SIZE);
+	for (int i = 0; i < PARTTAB_SIZE/PAGE_SIZE; i++)
+		pagezero((void*)PHYS_TO_DMAP(parttab_phys + i*PAGE_SIZE));
 
 	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
 	proctab0pa = moea64_bootstrap_alloc(proctab_size, proctab_size);
+	for (int i = 0; i < proctab_size/PAGE_SIZE; i++)
+		pagezero((void*)PHYS_TO_DMAP(parttab_phys + i*PAGE_SIZE));
 
 	mmu_radix_setup_pagetables(hwphyssz);
 }
@@ -1844,12 +1854,10 @@ mmu_parttab_init(void)
 
 	isa3_parttab = (struct pate *)PHYS_TO_DMAP(parttab_phys);
 
-	memset(isa3_parttab, 0, PARTTAB_SIZE);
 	printf("%s parttab: %p\n", __func__, isa3_parttab);
 	ptcr = parttab_phys | (PARTTAB_SIZE_SHIFT-12);
 	printf("setting ptcr %lx\n", ptcr);
 	mtspr(SPR_PTCR, ptcr);
-	printf("set ptcr\n");
 #if 0
 	/* functional simulator claims MCE on this */
 	powernv_set_nmmu_ptcr(ptcr);
@@ -1907,13 +1915,10 @@ mmu_radix_proctab_register(vm_paddr_t proctabpa, uint64_t table_size)
 static void
 mmu_radix_proctab_init(void)
 {
-	uint64_t proctab_size;
 
 	isa3_base_pid = 1;
 
-	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
 	isa3_proctab = (void*)PHYS_TO_DMAP(proctab0pa);
-	memset(isa3_proctab, 0, proctab_size);
 	isa3_proctab->proctab0 = htobe64(RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1) | \
 									 RADIX_PGD_INDEX_SHIFT);
 
@@ -2268,9 +2273,13 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	int rv, retrycount;
 	boolean_t nosleep;
 
-#if 0	
-	printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d)\n", pmap, va,
-	    m, prot, flags, psind);
+
+#ifdef INVARIANTS
+	if (pmap != kernel_pmap) {
+		printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- pid=%lu\n", pmap, va,
+			   m, prot, flags, psind, pmap->pm_pid);
+		pmap_pte_walk(pmap, va);
+	}
 #endif
 	va = trunc_page(va);
 	retrycount = 0;
@@ -3045,8 +3054,11 @@ METHODVOID(init)
 	mtx_init(&qframe_mtx, "qfrmlk", NULL, MTX_SPIN);
 	error = vmem_alloc(kernel_arena, PAGE_SIZE, M_BESTFIT | M_WAITOK,
 	    (vmem_addr_t *)&qframe);
+
 	if (error != 0)
 		panic("qframe allocation failed");
+	asid_arena = vmem_create("ASID", isa3_base_pid + 1, (1<<isa3_pid_bits), 1, 1,
+							 M_WAITOK);
 }
 
 VISIBILITY boolean_t
@@ -3135,6 +3147,9 @@ METHOD(page_wired_mappings) vm_page_t m)
 static inline int
 mmu_radix_pmap_pinit(pmap_t pmap)
 {
+	vmem_addr_t pid;
+	vm_paddr_t l1pa;
+	int error;
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
 
@@ -3149,6 +3164,16 @@ mmu_radix_pmap_pinit(pmap_t pmap)
 	TAILQ_INIT(&pmap->pm_pvchunk);
 	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
 	pmap->pm_flags = PMAP_PDE_SUPERPAGE;
+	error = vmem_alloc(asid_arena, 1, M_FIRSTFIT|M_WAITOK, &pid);
+	if (__predict_false(error)) {
+		uma_zfree(zone_radix_pgd, pmap->pm_pml1);
+		return (0);
+	}
+	printf("allocated pid=%lu\n", pid);
+	pmap->pm_pid = pid;
+	l1pa = DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1);
+	isa3_proctab[pid].proctab0 = htobe64(RTS_SIZE |  l1pa | RADIX_PGD_INDEX_SHIFT);
+	__asm __volatile("ptesync;isync" : : : "memory");
 	return (1);
 }
 
@@ -3393,6 +3418,7 @@ METHOD(pinit0) pmap_t pmap)
 	PMAP_LOCK_INIT(pmap);
 	pmap->pm_pml1 = kernel_pmap->pm_pml1;
 	pmap->pm_pid = kernel_pmap->pm_pid;
+	PCPU_SET(asid, kernel_pmap->pm_pid);
 	pmap->pm_root.rt_root = 0;
 	TAILQ_INIT(&pmap->pm_pvchunk);
 	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
@@ -4291,8 +4317,17 @@ METHOD(activate) struct thread *td)
 	oldpmap = PCPU_GET(curpmap);
 	pmap = vmspace_pmap(td->td_proc->p_vmspace);
 	if (oldpmap != pmap) {
+		uint32_t curpid;
+
+		curpid = PCPU_GET(asid);
 		PCPU_SET(curpmap, pmap);
-		mmu_radix_pid_set(pmap);
+
+		if (pmap->pm_pid > isa3_base_pid &&
+			curpid != pmap->pm_pid) {
+			mmu_radix_pid_set(pmap);
+			PCPU_SET(asid, pmap->pm_pid);
+			printf("activated pid=%lu\n", pmap->pm_pid);
+		}
 	}
 	critical_exit();
 }
@@ -4636,30 +4671,18 @@ pmap_is_valid_memattr(pmap_t pmap __unused, vm_memattr_t mode)
 }
 #endif
 
-#include "opt_ddb.h"
 #ifdef DDB
 #include <sys/kdb.h>
 #include <ddb/ddb.h>
 
-DB_SHOW_COMMAND(pte, pmap_print_pte)
+static void
+pmap_pte_walk(pmap_t pmap, vm_offset_t va)
 {
-	pmap_t pmap;
 	pml1_entry_t *l1e;
 	pml2_entry_t *l2e;
 	pml3_entry_t *l3e;
 	pt_entry_t *pte;
-	vm_offset_t va;
-
-	if (!have_addr) {
-		db_printf("show pte addr\n");
-		return;
-	}
-	va = (vm_offset_t)addr;
-
-	if (kdb_thread != NULL)
-		pmap = vmspace_pmap(kdb_thread->td_proc->p_vmspace);
-	else
-		pmap = PCPU_GET(curpmap);
+	uint64_t pid;
 
 	l1e = pmap_pml1e(pmap, va);
 	db_printf("VA %#016lx l1e %#016lx", va, *l1e);
@@ -4680,6 +4703,28 @@ DB_SHOW_COMMAND(pte, pmap_print_pte)
 		return;
 	}
 	pte = pmap_l3e_to_pte(l3e, va);
-	db_printf(" pte %#016lx\n", *pte);
+	pid = mfspr(SPR_PID);
+	db_printf(" pte %#016lx pm_pid %lx pid %lx addr %p\n", *pte,
+			  pmap->pm_pid, pid, 
+			  &isa3_proctab[pmap->pm_pid]);
+}
+
+DB_SHOW_COMMAND(pte, pmap_print_pte)
+{
+	vm_offset_t va;
+	pmap_t pmap;
+
+	if (!have_addr) {
+		db_printf("show pte addr\n");
+		return;
+	}
+	va = (vm_offset_t)addr;
+
+	if (kdb_thread != NULL)
+		pmap = vmspace_pmap(kdb_thread->td_proc->p_vmspace);
+	else
+		pmap = PCPU_GET(curpmap);
+
+	pmap_pte_walk(pmap, va);
 }
 #endif
