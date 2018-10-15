@@ -173,8 +173,8 @@ struct prte {
 #define	RPDE_NLS_MASK		0x000000000000001FULL
 
 
-#define	PG_FRAME	(0x01fffffffffff000ul)
-#define	PG_PS_FRAME	(0x01ffffffffe00000ul)
+#define	PG_FRAME	(0x000ffffffffff000ul)
+#define	PG_PS_FRAME	(0x000fffffffe00000ul)
 
 
 #ifndef	LOCORE
