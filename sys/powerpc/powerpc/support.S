@@ -39,6 +39,10 @@
 #include <machine/param.h>
 #include <machine/asm.h>
 
+#ifdef _CALL_ELF
+.abiversion _CALL_ELF
+#endif
+
 .macro PROLOGUE
 	mflr	%r0 
 	std	%r0, 16(%r1)
@@ -66,7 +70,8 @@
 .macro SET_COPYFAULT raddr rpcb
 	VALIDATE_ADDR_COPY \raddr
 	PCPU(%r6)
-	ld  %r9, copy_fault@got(%r2)
+	addis  %r9, %r2,copy_fault@got@ha
+	ld  %r9, copy_fault@got@l(%r9)
 	ld  %r0, 0(%r9)
 	ld  \rpcb, PC_CURPCB(%r6)
 	std %r0, PCB_ONFAULT(\rpcb)	
@@ -75,7 +80,8 @@
 .macro SET_FUSUFAULT raddr rpcb
 	VALIDATE_ADDR_FUSU \raddr
 	PCPU(%r6)
-	ld  %r9, fusufault@got(%r2)
+	addis  %r9, %r2,fusufault@got@ha
+	ld  %r9, copy_fault@got@l(%r9)
 	ld  %r0, 0(%r9)
 	ld  \rpcb, PC_CURPCB(%r6)
 	std %r0, PCB_ONFAULT(\rpcb)	
@@ -265,6 +271,7 @@ ENTRY(copyout)
 	PROLOGUE	
 	SET_COPYFAULT raddr=%r4 rpcb=%r7
 	bl bcopy_generic 
+	nop
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
 
@@ -272,6 +279,7 @@ ENTRY(copyin)
 	PROLOGUE	
 	SET_COPYFAULT raddr=%r3 rpcb=%r7
 	bl bcopy_generic
+	nop
 	CLEAR_FAULT rpcb=%r7
 	EPILOGUE
 /*
