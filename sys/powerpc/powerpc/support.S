@@ -51,6 +51,7 @@
 .macro EPILOGUE
 	ld	%r0, 16(%r1)
 	mtlr	%r0
+	blr
 .endm
 
 .macro VALIDATE_ADDR_COPY raddr
@@ -416,10 +417,8 @@ ENTRY(fusufault)
 	CLEAR_FAULT rpcb=%r7
 	li %r3, -1
 	EPILOGUE
-	blr
 
 ENTRY(copy_fault)
 	CLEAR_FAULT rpcb=%r7
 	li %r3, EFAULT
 	EPILOGUE
-	blr
