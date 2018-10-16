@@ -56,15 +56,15 @@
 .endm
 
 .macro VALIDATE_ADDR_COPY raddr
-	srdi  %r0, \raddr, 62
-	cmpwi %r0, 3
+	srdi  %r0, \raddr, 52
+	cmpwi %r0, 1
 	bge-	copy_fault
 	nop
 .endm
 
 .macro VALIDATE_ADDR_FUSU raddr
-	srdi  %r0, \raddr, 62
-	cmpwi %r0, 3
+	srdi  %r0, \raddr, 52
+	cmpwi %r0, 1
 	bge-	fusufault
 	nop
 .endm
@@ -73,17 +73,17 @@
 
 .macro SET_COPYFAULT raddr rpcb
 	VALIDATE_ADDR_COPY \raddr
-	PCPU(%r6)
+	PCPU(%r9)
 	li %r0, 1
-	ld  \rpcb, PC_CURPCB(%r6)
+	ld  \rpcb, PC_CURPCB(%r9)
 	std %r0, PCB_ONFAULT(\rpcb)
 .endm
 
 .macro SET_FUSUFAULT raddr rpcb
 	VALIDATE_ADDR_FUSU \raddr
-	PCPU(%r6)
+	PCPU(%r9)
 	li  %r0, 2
-	ld  \rpcb, PC_CURPCB(%r6)
+	ld  \rpcb, PC_CURPCB(%r9)
 	std %r0, PCB_ONFAULT(\rpcb)
 .endm
 
@@ -300,19 +300,17 @@ ENTRY(copyinstr)
 	mtctr	%r5
 0:
 	addi	%r8, %r8, 1
-	lbz	%r0, 0(%r3)
-	stb	%r0, 0(%r4)
+	lbzu	%r0, 0(%r3)
+	stbu	%r0, 0(%r4)
 
 	// NULL byte reached ?
 	cmplwi	0, %r0, 0
 	beq	1f
-	
-	addi	%r3, %r3, 1
-	addi	%r4, %r4, 1
+
 	bdnz+	0b
+	nop
 1:
 	std	%r8, 0(%r6)
-	li	%r3, 0
 	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 
