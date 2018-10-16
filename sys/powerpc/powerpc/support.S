@@ -294,24 +294,26 @@ ENTRY(copyin)
 ENTRY(copyinstr)
 	PROLOGUE
 	SET_COPYFAULT raddr=%r3 rpcb=%r7
-	li	%r8, 0
-	cmplwi	0, %r5, 0
-	beq	1f
-	mtctr	%r5
+	addi	%r9, %r5, 1
+	mtctr	%r9
+	mr	%r8, %r3
+	li	%r3, ENAMETOOLONG
 0:
-	addi	%r8, %r8, 1
-	lbzu	%r0, 0(%r3)
-	stbu	%r0, 0(%r4)
+	bdz-	2f
+	lbzu	%r0, 1(%r8)
+	stbu	%r0, 1(%r4)
 
 	// NULL byte reached ?
-	cmplwi	0, %r0, 0
-	beq	1f
-
-	bdnz+	0b
-	nop
+	cmpdi	%r0, 0
+	beq-	1f
+	b	0b
 1:
-	std	%r8, 0(%r6)
-	CLEAR_FAULT rpcb=%r7 clobber=1
+	li	%r3, 0
+2:
+	mfctr	%r0
+	sub	%r0, %r9, %r0
+	std	%r0, 0(%r6)
+	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
 ENTRY(subyte)
@@ -370,29 +372,33 @@ ENTRY(fuword16)
 ENTRY(fueword)	
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
-	lwz  %r3, 0(%r3)
-	CLEAR_FAULT rpcb=%r7 clobber=0
+	lwz  %r0,, 0(%r3)
+	stw  %r0,  0(%r4)
+	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 #endif	
 ENTRY(fueword32)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
-	lwz  %r3, 0(%r3) 
-	CLEAR_FAULT rpcb=%r7 clobber=0
+	lwz  %r0, 0(%r3)
+	stw  %r0,  0(%r4)
+	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 
 #ifdef __powerpc64__
 ENTRY(fueword)	
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
-	ld %r3, 0(%r3)
+	ld  %r0, 0(%r3)
+	std %r0, 0(%r4)
 	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
 ENTRY(fueword64)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
-	ld %r3, 0(%r3)
+	ld  %r0, 0(%r3)
+	std %r0, 0(%r4)
 	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 #endif
