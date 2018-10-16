@@ -312,9 +312,13 @@ ENTRY(copyinstr)
 1:
 	li	%r3, 0
 2:
+	/* skip storing length if done is NULL */
+	cmpdi	%r6, 0
+	beq-	3f
 	mfctr	%r0
 	sub	%r0, %r9, %r0
 	std	%r0, 0(%r6)
+3:
 	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
