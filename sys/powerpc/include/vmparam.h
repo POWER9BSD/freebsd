@@ -197,7 +197,11 @@ struct pmap_physseg {
 /*
  * The largest allocation size is 4MB.
  */
+#ifdef __powerpc64__
+#define	VM_NFREEORDER		13
+#else
 #define	VM_NFREEORDER		11
+#endif
 
 /*
  * Disable superpage reservations.
@@ -252,7 +256,19 @@ struct pmap_physseg {
     VM_MIN_KERNEL_ADDRESS + 1) * 2 / 5)
 #endif
 
+#ifdef __powerpc64__
+#define	ZERO_REGION_SIZE	(2 * 1024 * 1024)	/* 2MB */
+#else
 #define	ZERO_REGION_SIZE	(64 * 1024)	/* 64KB */
+#endif
+
+/*
+ * Use a fairly large batch size since we expect ppc64 systems to have lots of
+ * memory.
+ */
+#ifdef __powerpc64__
+#define	VM_BATCHQUEUE_SIZE	31
+#endif
 
 /*
  * On 32-bit OEA, the only purpose for which sf_buf is used is to implement
