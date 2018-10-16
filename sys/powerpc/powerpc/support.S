@@ -169,7 +169,7 @@ ENTRY(bcopy_generic)
 0:
 	bf	27, 1f
 	ld	t1, 0(rs)
-	ld	t2, 0(rs)
+	ld	t2, 8(rs)
 	addi	rs, rs, 16
 	std	t1, 0(rd)
 	std	t2, 8(rd)
