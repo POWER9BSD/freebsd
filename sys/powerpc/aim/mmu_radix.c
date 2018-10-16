@@ -2275,8 +2275,9 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 
 #ifdef INVARIANTS
 	if (pmap != kernel_pmap) {
-		printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- pid=%lu\n", pmap, va,
-			   m, prot, flags, psind, pmap->pm_pid);
+		printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- asid=%lu curpid=%d name=%s\n",
+			   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
+			   curproc->p_comm);
 		pmap_pte_walk(pmap->pm_pml1, va);
 	}
 #endif
@@ -4565,7 +4566,7 @@ METHOD(decode_kernel_ptr) vm_offset_t addr, int *is_user, vm_offset_t *decoded)
 
 	CTR2(KTR_PMAP, "%s(%#jx)", __func__, (uintmax_t)addr);
 	*decoded = addr;
-	*is_user = (addr < DMAP_MIN_ADDRESS);
+	*is_user = (addr < VM_MAXUSER_ADDRESS);
 	return (0);
 }
 
@@ -4718,7 +4719,9 @@ DB_SHOW_COMMAND(pte, pmap_print_pte)
 	}
 	va = (vm_offset_t)addr;
 
-	if (kdb_thread != NULL)
+	if (va >= DMAP_MIN_ADDRESS)
+		pmap = kernel_pmap;
+	else if (kdb_thread != NULL)
 		pmap = vmspace_pmap(kdb_thread->td_proc->p_vmspace);
 	else
 		pmap = PCPU_GET(curpmap);
