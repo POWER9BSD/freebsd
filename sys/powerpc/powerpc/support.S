@@ -297,6 +297,8 @@ ENTRY(copyinstr)
 	addi	%r9, %r5, 1
 	mtctr	%r9
 	mr	%r8, %r3
+	addi	%r8, %r8, -1
+	addi	%r4, %r4, -1
 	li	%r3, ENAMETOOLONG
 0:
 	bdz-	2f
