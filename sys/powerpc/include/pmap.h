@@ -226,7 +226,11 @@ struct	md_page {
 };
 
 #define	pmap_page_get_memattr(m)	((m)->md.mdpg_cache_attrs)
+#if 0
 #define	pmap_page_is_mapped(m)	(!LIST_EMPTY(&(m)->md.mdpg_pvoh))
+#else
+boolean_t pmap_page_is_mapped(vm_page_t m);
+#endif
 
 /*
  * Return the VSID corresponding to a given virtual address.

@@ -3074,12 +3074,22 @@ METHOD(is_modified) vm_page_t m)
 }
 
 VISIBILITY boolean_t
-METHOD(is_prefaultable) pmap_t pmap, vm_offset_t va)
+METHOD(is_prefaultable) pmap_t pmap, vm_offset_t addr)
 {
+	pml3_entry_t *l3e;
+	pt_entry_t *pte;
+	boolean_t rv;
 
-	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, pmap, va);
-	UNIMPLEMENTED();
-	return false;
+	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, pmap, addr);
+	rv = FALSE;
+	PMAP_LOCK(pmap);
+	l3e = pmap_pml3e(pmap, addr);
+	if (l3e != NULL && (*l3e & (RPTE_LEAF | PG_V)) == PG_V) {
+		pte = pmap_l3e_to_pte(l3e, addr);
+		rv = (*pte & PG_V) == 0;
+	}
+	PMAP_UNLOCK(pmap);
+	return (rv);
 }
 
 VISIBILITY boolean_t
@@ -4256,6 +4266,27 @@ METHOD(remove_all) vm_page_t m)
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	UNIMPLEMENTED();
+}
+
+/*
+ * Returns TRUE if the given page is mapped individually or as part of
+ * a 2mpage.  Otherwise, returns FALSE.
+ */
+boolean_t
+pmap_page_is_mapped(vm_page_t m)
+{
+	struct rwlock *lock;
+	boolean_t rv;
+
+	if ((m->oflags & VPO_UNMANAGED) != 0)
+		return (FALSE);
+	lock = VM_PAGE_TO_PV_LIST_LOCK(m);
+	rw_rlock(lock);
+	rv = !TAILQ_EMPTY(&m->md.pv_list) ||
+	    ((m->flags & PG_FICTITIOUS) == 0 &&
+	    !TAILQ_EMPTY(&pa_to_pvh(VM_PAGE_TO_PHYS(m))->pv_list));
+	rw_runlock(lock);
+	return (rv);
 }
 
 VISIBILITY void
