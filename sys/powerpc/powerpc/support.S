@@ -52,21 +52,24 @@
 	ld	%r0, 16(%r1)
 	mtlr	%r0
 	blr
+	nop
 .endm
 
 .macro VALIDATE_ADDR_COPY raddr
 	srdi  %r0, \raddr, 62
 	cmpwi %r0, 3
 	bge-	copy_fault
+	nop
 .endm
 
 .macro VALIDATE_ADDR_FUSU raddr
 	srdi  %r0, \raddr, 62
 	cmpwi %r0, 3
 	bge-	fusufault
+	nop
 .endm
 	
-#define PCPU(reg) mfsprg  reg, 0	
+#define PCPU(reg) mfsprg  reg, 0
 
 .macro SET_COPYFAULT raddr rpcb
 	VALIDATE_ADDR_COPY \raddr
@@ -84,9 +87,12 @@
 	std %r0, PCB_ONFAULT(\rpcb)
 .endm
 
-.macro CLEAR_FAULT rpcb
+.macro CLEAR_FAULT rpcb clobber
 	li  %r0, 0
 	std %r0, PCB_ONFAULT(\rpcb)
+.if  	\clobber == 1
+	li  %r3, 0
+.endif
 .endm
 
 /*
@@ -269,7 +275,7 @@ ENTRY(copyout)
 	SET_COPYFAULT raddr=%r4 rpcb=%r7
 	bl bcopy_generic 
 	nop
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 
 ENTRY(copyin)
@@ -277,7 +283,7 @@ ENTRY(copyin)
 	SET_COPYFAULT raddr=%r3 rpcb=%r7
 	bl bcopy_generic
 	nop
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 /*
  * copyinstr(const void *udaddr, void *kaddr, size_t len, size_t *done)
@@ -291,7 +297,6 @@ ENTRY(copyinstr)
 	li	%r8, 0
 	cmplwi	0, %r5, 0
 	beq	1f
-
 	mtctr	%r5
 0:
 	addi	%r8, %r8, 1
@@ -308,7 +313,7 @@ ENTRY(copyinstr)
 1:
 	std	%r8, 0(%r6)
 	li	%r3, 0
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 
 
@@ -316,7 +321,7 @@ ENTRY(subyte)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	stb  %r4, 0(%r3)
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 
 #ifndef __powerpc64__
@@ -326,7 +331,7 @@ ENTRY(suword32)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	stw  %r4, 0(%r3)
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 
 #ifdef __powerpc64__	
@@ -335,7 +340,7 @@ ENTRY(suword64)
 	PROLOGUE	
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	std  %r4, 0(%r3) 
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 #endif	
 	
@@ -343,14 +348,14 @@ ENTRY(fubyte)
 	PROLOGUE	
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	lbz %r3, 0(%r3)
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
 ENTRY(fuword16)
 	PROLOGUE	
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	lhz %r3, 0(%r3)
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
 
@@ -361,7 +366,7 @@ ENTRY(fueword32)
 	PROLOGUE	
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	lwz  %r3, 0(%r3) 
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
 #ifdef __powerpc64__
@@ -370,7 +375,7 @@ ENTRY(fueword64)
 	PROLOGUE	
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	ld %r3, 0(%r3)
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE	
 #endif
 
@@ -390,7 +395,7 @@ ENTRY(casueword32)
 2:
 	stwcx. %r0, 0, %r3       	/* clear reservation (74xx) */
 3:	
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE	
 	
 
@@ -409,16 +414,16 @@ ENTRY(casueword64)
 2:
 	stdcx. %r0, 0, %r3       	/* clear reservation (74xx) */
 3:	
-	CLEAR_FAULT rpcb=%r7
-	EPILOGUE	
+	CLEAR_FAULT rpcb=%r7 clobber=0
+	EPILOGUE
 #endif
 	
 ENTRY(fusufault)
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=0
 	li %r3, -1
 	EPILOGUE
 
 ENTRY(copy_fault)
-	CLEAR_FAULT rpcb=%r7
+	CLEAR_FAULT rpcb=%r7 clobber=0
 	li %r3, EFAULT
 	EPILOGUE
