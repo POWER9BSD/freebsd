@@ -2120,6 +2120,7 @@ METHOD(clear_modify) vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
+	UNIMPLEMENTED();
 }
 
 VISIBILITY void
@@ -2129,6 +2130,7 @@ METHOD(copy) pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 
 	CTR6(KTR_PMAP, "%s(%p, %p, %#x, %#x, %#x)", __func__, dst_pmap,
 	    src_pmap, dst_addr, len, src_addr);
+	UNIMPLEMENTED();
 }
 
 VISIBILITY void
@@ -2136,6 +2138,7 @@ METHOD(copy_page) vm_page_t src, vm_page_t dst)
 {
 
 	CTR3(KTR_PMAP, "%s(%p, %p)", __func__, src, dst);
+	UNIMPLEMENTED();
 }
 
 VISIBILITY void
@@ -2145,6 +2148,7 @@ METHOD(copy_pages) vm_page_t ma[], vm_offset_t a_offset, vm_page_t mb[],
 
 	CTR6(KTR_PMAP, "%s(%p, %#x, %p, %#x, %#x)", __func__, ma,
 	    a_offset, mb, b_offset, xfersize);
+	UNIMPLEMENTED();
 }
 
 #if VM_NRESERVLEVEL > 0
@@ -2283,7 +2287,7 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 #endif
 	va = trunc_page(va);
 	retrycount = 0;
-	CTR6(KTR_PMAP, "pmap_enter(%p, %#lx, %p, %#x, %x, %d)", pmap, va,
+	CTR6(KTR_PMAP, "pmap_enter(%p, %#lx, %p, %#x, %#x, %d)", pmap, va,
 	    m, prot, flags, psind);
 	KASSERT(va <= VM_MAX_KERNEL_ADDRESS, ("pmap_enter: toobig"));
 	KASSERT((m->oflags & VPO_UNMANAGED) != 0 || va < kmi.clean_sva ||
@@ -2297,8 +2301,12 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	newpte = (pt_entry_t)(pa | PG_A | PG_V | RPTE_LEAF);
 	if ((flags & VM_PROT_WRITE) != 0)
 		newpte |= PG_M;
+	if ((flags & VM_PROT_READ) != 0)
+		newpte |= PG_A;
+	if (prot & VM_PROT_READ)
+		newpte |= RPTE_EAA_R;
 	if ((prot & VM_PROT_WRITE) != 0)
-		newpte |= PG_RW;
+		newpte |= RPTE_EAA_W;
 	KASSERT((newpte & (PG_M | PG_RW)) != PG_M,
 	    ("pmap_enter: flags includes VM_PROT_WRITE but prot doesn't"));
 
@@ -2826,6 +2834,7 @@ METHOD(enter_quick) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot)
 {
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %p, %#x)", __func__, pmap, va, m, prot);
+	UNIMPLEMENTED();
 
 }
 
