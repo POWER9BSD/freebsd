@@ -83,8 +83,8 @@
 #if !defined(LOCORE)
 #ifdef __powerpc64__
 #define	VM_MIN_ADDRESS		(0x0000000000000000UL)
-#define	VM_MAXUSER_ADDRESS	(0x000fffffffffffffUL)
-#define	VM_MAX_ADDRESS		(0xc00fffffffffffffUL)
+#define	VM_MAXUSER_ADDRESS	(0x000fffffc0000000UL)
+#define	VM_MAX_ADDRESS		(0xc00fffffc0000000UL)
 #else
 #define	VM_MIN_ADDRESS		((vm_offset_t)0)
 #define	VM_MAXUSER_ADDRESS	VM_MAXUSER_ADDRESS32
