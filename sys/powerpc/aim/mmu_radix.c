@@ -2329,7 +2329,6 @@ pmap_promote_l3e(pmap_t pmap, pml3_entry_t *pde, vm_offset_t va,
 
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
 
-	panic("%s -- sanity check\n", __func__);
 	/*
 	 * Examine the first PTE in the specified PTP.  Abort if this PTE is
 	 * either invalid, unused, or does not map the first 4KB physical page
@@ -2338,7 +2337,7 @@ pmap_promote_l3e(pmap_t pmap, pml3_entry_t *pde, vm_offset_t va,
 	firstpte = (pt_entry_t *)PHYS_TO_DMAP(*pde & PG_FRAME);
 setpde:
 	newpde = *firstpte;
-	if ((newpde & ((PG_FRAME & L2_PAGE_MASK) | PG_A | PG_V)) != (PG_A | PG_V)) {
+	if ((newpde & ((PG_FRAME & L3_PAGE_MASK) | PG_A | PG_V)) != (PG_A | PG_V)) {
 		atomic_add_long(&pmap_l3e_p_failures, 1);
 		CTR2(KTR_PMAP, "pmap_promote_l3e: failure for va %#lx"
 		    " in pmap %p", va, pmap);
@@ -2359,7 +2358,7 @@ setpde:
 	 * PTE maps an unexpected 4KB physical page or does not have identical
 	 * characteristics to the first PTE.
 	 */
-	pa = (newpde & (PG_PS_FRAME | PG_A | PG_V)) + L2_PAGE_SIZE - PAGE_SIZE;
+	pa = (newpde & (PG_PS_FRAME | PG_A | PG_V)) + L3_PAGE_SIZE - PAGE_SIZE;
 	for (pte = firstpte + NPTEPG - 1; pte > firstpte; pte--) {
 setpte:
 		oldpte = *pte;
@@ -4478,12 +4477,205 @@ pmap_page_is_mapped(vm_page_t m)
 	return (rv);
 }
 
+/*
+ * Destroy all managed, non-wired mappings in the given user-space
+ * pmap.  This pmap cannot be active on any processor besides the
+ * caller.
+ *
+ * This function cannot be applied to the kernel pmap.  Moreover, it
+ * is not intended for general use.  It is only to be used during
+ * process termination.  Consequently, it can be implemented in ways
+ * that make it faster than pmap_remove().  First, it can more quickly
+ * destroy mappings by iterating over the pmap's collection of PV
+ * entries, rather than searching the page table.  Second, it doesn't
+ * have to test and clear the page table entries atomically, because
+ * no processor is currently accessing the user address space.  In
+ * particular, a page table entry's dirty bit won't change state once
+ * this function starts.
+ *
+ * Although this function destroys all of the pmap's managed,
+ * non-wired mappings, it can delay and batch the invalidation of TLB
+ * entries without calling pmap_delayed_invl_started() and
+ * pmap_delayed_invl_finished().  Because the pmap is not active on
+ * any other processor, none of these TLB entries will ever be used
+ * before their eventual invalidation.  Consequently, there is no need
+ * for either pmap_remove_all() or pmap_remove_write() to wait for
+ * that eventual TLB invalidation.
+ */
+
 VISIBILITY void
 METHOD(remove_pages) pmap_t pmap)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
-	UNIMPLEMENTED();
+	pml3_entry_t ptel3e;
+	pt_entry_t *pte, tpte;
+	struct spglist free;
+	vm_page_t m, mpte, mt;
+	pv_entry_t pv;
+	struct md_page *pvh;
+	struct pv_chunk *pc, *npc;
+	struct rwlock *lock;
+	int64_t bit;
+	uint64_t inuse, bitmask;
+	int allfree, field, freed, idx;
+	boolean_t superpage;
+	vm_paddr_t pa;
+
+	/*
+	 * Assert that the given pmap is only active on the current
+	 * CPU.  Unfortunately, we cannot block another CPU from
+	 * activating the pmap while this function is executing.
+	 */
+	KASSERT(pmap == PCPU_GET(curpmap), ("non-current pmap %p", pmap));
+#ifdef INVARIANTS
+	{
+		cpuset_t other_cpus;
+
+		other_cpus = all_cpus;
+		critical_enter();
+		CPU_CLR(PCPU_GET(cpuid), &other_cpus);
+		CPU_AND(&other_cpus, &pmap->pm_active);
+		critical_exit();
+		KASSERT(CPU_EMPTY(&other_cpus), ("pmap active %p", pmap));
+	}
+#endif
+
+	lock = NULL;
+
+	SLIST_INIT(&free);
+	PMAP_LOCK(pmap);
+	TAILQ_FOREACH_SAFE(pc, &pmap->pm_pvchunk, pc_list, npc) {
+		allfree = 1;
+		freed = 0;
+		for (field = 0; field < _NPCM; field++) {
+			inuse = ~pc->pc_map[field] & pc_freemask[field];
+			while (inuse != 0) {
+				bit = bsfq(inuse);
+				bitmask = 1UL << bit;
+				idx = field * 64 + bit;
+				pv = &pc->pc_pventry[idx];
+				inuse &= ~bitmask;
+
+				pte = pmap_pml2e(pmap, pv->pv_va);
+				ptel3e = *pte;
+				pte = pmap_l2e_to_l3e(pte, pv->pv_va);
+				tpte = *pte;
+				if ((tpte & (RPTE_LEAF | PG_V)) == PG_V) {
+					superpage = FALSE;
+					ptel3e = tpte;
+					pte = (pt_entry_t *)PHYS_TO_DMAP(tpte &
+					    PG_FRAME);
+					pte = &pte[pmap_pte_index(pv->pv_va)];
+					tpte = *pte;
+				} else {
+					/*
+					 * Keep track whether 'tpte' is a
+					 * superpage explicitly instead of
+					 * relying on PG_PS being set.
+					 *
+					 * This is because PG_PS is numerically
+					 * identical to PG_PTE_PAT and thus a
+					 * regular page could be mistaken for
+					 * a superpage.
+					 */
+					superpage = TRUE;
+				}
+
+				if ((tpte & PG_V) == 0) {
+					panic("bad pte va %lx pte %lx",
+					    pv->pv_va, tpte);
+				}
+
+/*
+ * We cannot remove wired pages from a process' mapping at this time
+ */
+				if (tpte & PG_W) {
+					allfree = 0;
+					continue;
+				}
+
+				if (superpage)
+					pa = tpte & PG_PS_FRAME;
+				else
+					pa = tpte & PG_FRAME;
+
+				m = PHYS_TO_VM_PAGE(pa);
+				KASSERT(m->phys_addr == pa,
+				    ("vm_page_t %p phys_addr mismatch %016jx %016jx",
+				    m, (uintmax_t)m->phys_addr,
+				    (uintmax_t)tpte));
+
+				KASSERT((m->flags & PG_FICTITIOUS) != 0 ||
+				    m < &vm_page_array[vm_page_array_size],
+				    ("pmap_remove_pages: bad tpte %#jx",
+				    (uintmax_t)tpte));
+
+				pte_clear(pte);
+
+				/*
+				 * Update the vm_page_t clean/reference bits.
+				 */
+				if ((tpte & (PG_M | PG_RW)) == (PG_M | PG_RW)) {
+					if (superpage) {
+						for (mt = m; mt < &m[L3_PAGE_SIZE / PAGE_SIZE]; mt++)
+							vm_page_dirty(mt);
+					} else
+						vm_page_dirty(m);
+				}
+
+				CHANGE_PV_LIST_LOCK_TO_VM_PAGE(&lock, m);
+
+				/* Mark free */
+				pc->pc_map[field] |= bitmask;
+				if (superpage) {
+					pmap_resident_count_dec(pmap, L3_PAGE_SIZE / PAGE_SIZE);
+					pvh = pa_to_pvh(tpte & PG_PS_FRAME);
+					TAILQ_REMOVE(&pvh->pv_list, pv, pv_next);
+					pvh->pv_gen++;
+					if (TAILQ_EMPTY(&pvh->pv_list)) {
+						for (mt = m; mt < &m[L3_PAGE_SIZE / PAGE_SIZE]; mt++)
+							if ((mt->aflags & PGA_WRITEABLE) != 0 &&
+							    TAILQ_EMPTY(&mt->md.pv_list))
+								vm_page_aflag_clear(mt, PGA_WRITEABLE);
+					}
+					mpte = pmap_remove_pt_page(pmap, pv->pv_va);
+					if (mpte != NULL) {
+						pmap_resident_count_dec(pmap, 1);
+						KASSERT(mpte->wire_count == NPTEPG,
+						    ("pmap_remove_pages: pte page wire count error"));
+						mpte->wire_count = 0;
+						pmap_add_delayed_free_list(mpte, &free, FALSE);
+					}
+				} else {
+					pmap_resident_count_dec(pmap, 1);
+					TAILQ_REMOVE(&m->md.pv_list, pv, pv_next);
+					m->md.pv_gen++;
+					if ((m->aflags & PGA_WRITEABLE) != 0 &&
+					    TAILQ_EMPTY(&m->md.pv_list) &&
+					    (m->flags & PG_FICTITIOUS) == 0) {
+						pvh = pa_to_pvh(VM_PAGE_TO_PHYS(m));
+						if (TAILQ_EMPTY(&pvh->pv_list))
+							vm_page_aflag_clear(m, PGA_WRITEABLE);
+					}
+				}
+				pmap_unuse_pt(pmap, pv->pv_va, ptel3e, &free);
+				freed++;
+			}
+		}
+		PV_STAT(atomic_add_long(&pv_entry_frees, freed));
+		PV_STAT(atomic_add_int(&pv_entry_spare, freed));
+		PV_STAT(atomic_subtract_long(&pv_entry_count, freed));
+		if (allfree) {
+			TAILQ_REMOVE(&pmap->pm_pvchunk, pc, pc_list);
+			free_pv_chunk(pc);
+		}
+	}
+	if (lock != NULL)
+		rw_wunlock(lock);
+	pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
+	vm_page_free_pages_toq(&free, true);
 }
 
 VISIBILITY void
