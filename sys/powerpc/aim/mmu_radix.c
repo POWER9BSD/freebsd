@@ -667,27 +667,8 @@ cnttzd(uint64_t word)
 static inline int
 bsfq(uint64_t word)
 {
-	int result;
-#if _BYTE_ORDER == _LITTLE_ENDIAN
-	result = cntlzd(word);
-#else
-	result = cnttzd(word);
-#endif
-	return (result);
+	return (cnttzd(word));
 }
-
-#if 0
-static __inline int
-ffsl(uint64_t word)
-{
-	int lz;
-
-	lz = cntlzd(word);
-	if (lz == 64)
-		return (0);
-	return (lz+1);
-}
-#endif
 
 static bool
 pmap_not_in_di(void)
