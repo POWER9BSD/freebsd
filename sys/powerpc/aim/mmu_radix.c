@@ -1490,7 +1490,7 @@ pmap_pv_promote_l3e(pmap_t pmap, vm_offset_t va, vm_paddr_t pa,
 	TAILQ_INSERT_TAIL(&pvh->pv_list, pv, pv_next);
 	pvh->pv_gen++;
 	/* Free the remaining NPTEPG - 1 pv entries. */
-	va_last = va + L2_PAGE_SIZE - PAGE_SIZE;
+	va_last = va + L3_PAGE_SIZE - PAGE_SIZE;
 	do {
 		m++;
 		va += PAGE_SIZE;
@@ -2871,10 +2871,10 @@ METHOD(enter_object) pmap_t pmap, vm_offset_t start, vm_offset_t end,
 	PMAP_LOCK(pmap);
 	while (m != NULL && (diff = m->pindex - m_start->pindex) < psize) {
 		va = start + ptoa(diff);
-		if ((va & L2_PAGE_MASK) == 0 && va + L2_PAGE_SIZE <= end &&
+		if ((va & L3_PAGE_MASK) == 0 && va + L3_PAGE_SIZE <= end &&
 		    m->psind == 1 && pmap_ps_enabled(pmap) &&
 		    pmap_enter_2mpage(pmap, va, m, prot, &lock))
-			m = &m[L2_PAGE_SIZE / PAGE_SIZE - 1];
+			m = &m[L3_PAGE_SIZE / PAGE_SIZE - 1];
 		else
 			mpte = pmap_enter_quick_locked(pmap, va, m, prot,
 			    mpte, &lock);
@@ -3156,6 +3156,7 @@ radix_pgd_import(void *arg __unused, void **store, int count, int domain __unuse
 		vm_page_t m = vm_page_alloc_contig(NULL, 0, VM_ALLOC_NORMAL | VM_ALLOC_NOOBJ |
 			VM_ALLOC_WIRED | VM_ALLOC_ZERO | VM_ALLOC_WAITOK, RADIX_PGD_SIZE/PAGE_SIZE,
 		    0, (vm_paddr_t)-1, RADIX_PGD_SIZE, L1_PAGE_SIZE, VM_MEMATTR_DEFAULT);
+		/* XXX zero on alloc here so we don't have to later */
 		store[i] = (void *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(m));
 	}
 	printf("%s done\n", __func__);
