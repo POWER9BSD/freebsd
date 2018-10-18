@@ -3687,7 +3687,7 @@ METHOD(object_init_pt) pmap_t pmap, vm_offset_t addr, vm_object_t object,
 		p = vm_page_lookup(object, pindex);
 		KASSERT(p->valid == VM_PAGE_BITS_ALL,
 		    ("pmap_object_init_pt: invalid page %p", p));
-		pat_mode = p->md.md_attr;
+		pat_mode = p->md.mdpg_cache_attrs;
 
 		/*
 		 * Abort the mapping if the first page is not physically
@@ -3708,7 +3708,7 @@ METHOD(object_init_pt) pmap_t pmap, vm_offset_t addr, vm_object_t object,
 			KASSERT(p->valid == VM_PAGE_BITS_ALL,
 			    ("pmap_object_init_pt: invalid page %p", p));
 			if (pa != VM_PAGE_TO_PHYS(p) ||
-			    pat_mode != p->md.md_attr)
+			    pat_mode != p->md.mdpg_cache_attrs)
 				return;
 			p = TAILQ_NEXT(p, listq);
 		}

@@ -211,16 +211,15 @@ struct pv_chunk {
 };
 
 struct	md_page {
+	vm_memattr_t	 mdpg_cache_attrs;
 	union {
 		struct {
 			volatile int32_t mdpg_attrs;
-			vm_memattr_t	 mdpg_cache_attrs;
 			struct	pvo_head mdpg_pvoh;
 		};
 		struct {
-			TAILQ_HEAD(, pv_entry)	pv_list;  /* (p) */
 			int			pv_gen;   /* (p) */
-			vm_memattr_t	md_attr;
+			TAILQ_HEAD(, pv_entry)	pv_list;  /* (p) */
 		};
 	};
 };
