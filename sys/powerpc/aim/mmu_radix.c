@@ -95,7 +95,6 @@ __FBSDID("$FreeBSD$");
 static void pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va);
 #endif
 
-#define FULL_FEATURED 0
 
 static int nkpt = 64;
 SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
@@ -104,7 +103,11 @@ SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
 
 static SYSCTL_NODE(_vm, OID_AUTO, pmap, CTLFLAG_RD, 0, "VM/pmap parameters");
 
-static int pg_ps_enabled = FULL_FEATURED;
+#ifdef FULL_FEATURED
+static int pg_ps_enabled = 1;
+#else
+static int pg_ps_enabled = 0;
+#endif
 SYSCTL_INT(_vm_pmap, OID_AUTO, pg_ps_enabled, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
     &pg_ps_enabled, 0, "Are large page mappings enabled?");
 
@@ -602,7 +605,8 @@ pa_cmp(const void *a, const void *b)
 #define	pte_load_store(ptep, pte)	atomic_swap_long(ptep, pte)
 #define	pte_load_clear(ptep)		atomic_swap_long(ptep, 0)	
 #define	pte_store(ptep, pte) do {	   \
-	*(u_long *)(ptep) = (u_long)(pte | PG_V | RPTE_LEAF); \
+		MPASS((pte) & (RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_X));	\
+		*(u_long *)(ptep) = (u_long)((pte) | PG_V | RPTE_LEAF);	\
 } while (0)
 /*
  * NB: should only be used for adding directories - not for direct mappings
@@ -628,7 +632,7 @@ pa_cmp(const void *a, const void *b)
 #define PG_M	RPTE_C
 #define PG_A	RPTE_R
 #define PG_X	RPTE_EAA_X
-#define PG_RW	(RPTE_EAA_R| RPTE_EAA_W)
+#define PG_RW	RPTE_EAA_W
 #define PG_PTE_CACHE RPTE_ATTR_MASK
 
 
@@ -639,7 +643,7 @@ pa_cmp(const void *a, const void *b)
  * (PTE) page mappings have identical settings for the following fields:
  */
 #define	PG_PTE_PROMOTE	(PG_X | PG_MANAGED | PG_W | PG_PTE_CACHE | \
-	    PG_M | PG_A | RPTE_EAA_P | PG_RW | PG_V)
+	    PG_M | PG_A | RPTE_EAA_MASK | PG_V)
 
 
 static __inline void
@@ -2188,8 +2192,8 @@ restart:
 					if ((oldpte & PG_V) != 0) {
 						while (!atomic_cmpset_long(pte,
 						    oldpte,
-						    oldpte & ~(PG_M | PG_RW)))
-							oldpte = *pte;
+							(oldpte | RPTE_EAA_R) & ~(PG_M | PG_RW)))
+							   oldpte = *pte;
 						vm_page_dirty(m);
 						pmap_invalidate_page(pmap, va);
 					}
@@ -2235,7 +2239,7 @@ METHOD(copy) pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 	vm_offset_t va_next;
 	vm_page_t dst_pdpg, dstmpte, srcmpte;
 
-#if FULL_FEATURED==0
+#ifndef FULL_FEATURED
 	return;
 #endif
 	CTR6(KTR_PMAP, "%s(%p, %p, %#x, %#x, %#x)", __func__, dst_pmap,
@@ -2438,9 +2442,9 @@ setpde:
 		 * When PG_M is already clear, PG_RW can be cleared without
 		 * a TLB invalidation.
 		 */
-		if (!atomic_cmpset_long(firstpte, newpde, newpde & ~PG_RW))
+		if (!atomic_cmpset_long(firstpte, newpde, (newpde | RPTE_EAA_R) & ~RPTE_EAA_W))
 			goto setpde;
-		newpde &= ~PG_RW;
+		newpde &= ~RPTE_EAA_W;
 	}
 
 	/*
@@ -2463,9 +2467,9 @@ setpte:
 			 * When PG_M is already clear, PG_RW can be cleared
 			 * without a TLB invalidation.
 			 */
-			if (!atomic_cmpset_long(pte, oldpte, oldpte & ~PG_RW))
+			if (!atomic_cmpset_long(pte, oldpte, (oldpte | RPTE_EAA_R) & ~RPTE_EAA_W))
 				goto setpte;
-			oldpte &= ~PG_RW;
+			oldpte &= ~RPTE_EAA_W;
 			CTR2(KTR_PMAP, "pmap_promote_l3e: protect for va %#lx"
 			    " in pmap %p", (oldpte & PG_FRAME & L3_PAGE_MASK) |
 			    (va & ~L3_PAGE_MASK), pmap);
@@ -2504,7 +2508,7 @@ setpte:
 	if ((newpde & PG_MANAGED) != 0)
 		pmap_pv_promote_l3e(pmap, va, newpde & PG_PS_FRAME, lockp);
 
-	pte_store(pde, PG_PROMOTED | RPTE_LEAF | RPTE_VALID | newpde);
+	pte_store(pde, PG_PROMOTED | newpde);
 
 	atomic_add_long(&pmap_l3e_promotions, 1);
 	CTR2(KTR_PMAP, "pmap_promote_l3e: success for va %#lx"
@@ -3402,12 +3406,10 @@ restart:
 		}
 		pte = pmap_pte(pmap, pv->pv_va);
 		mask = 0;
-		if (modified) {
+		if (modified)
 			mask |= PG_RW | PG_M;
-		}
-		if (accessed) {
+		if (accessed) 
 			mask |= PG_V | PG_A;
-		}
 		rv = (*pte & mask) == mask;
 		PMAP_UNLOCK(pmap);
 		if (rv)
@@ -3431,12 +3433,10 @@ restart:
 			}
 			pte = pmap_pml3e(pmap, pv->pv_va);
 			mask = 0;
-			if (modified) {
+			if (modified)
 				mask |= PG_RW | PG_M;
-			}
-			if (accessed) {
+			if (accessed)
 				mask |= PG_V | PG_A;
-			}
 			rv = (*pte & mask) == mask;
 			PMAP_UNLOCK(pmap);
 			if (rv)
@@ -3480,7 +3480,7 @@ METHOD(is_prefaultable) pmap_t pmap, vm_offset_t addr)
 	pt_entry_t *pte;
 	boolean_t rv;
 
-#if FULL_FEATURED==0
+#ifndef FULL_FEATURED
 	return (FALSE);
 #endif
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, pmap, addr);
@@ -3747,7 +3747,7 @@ METHOD(object_init_pt) pmap_t pmap, vm_offset_t addr, vm_object_t object,
 			l3e = (pml3_entry_t *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(pdpg));
 			l3e = &l3e[pmap_pml3e_index(addr)];
 			if ((*l3e & PG_V) == 0) {
-				pa |= RPTE_LEAF  | PG_M | PG_A | PG_RW | PG_V;
+				pa |= PG_M | PG_A | PG_RW;
 				pte_store(l3e, pa); 
 				pmap_resident_count_inc(pmap, L3_PAGE_SIZE / PAGE_SIZE);
 				atomic_add_long(&pmap_l3e_mappings, 1);
@@ -3977,7 +3977,7 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 		/* Wire up a new PDPE page */
 		pml1index = ptepindex - (NUPDE + NUPDPE);
 		l1e = &pmap->pm_pml1[pml1index];
-		*l1e = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
+		pde_store(l1e, VM_PAGE_TO_PHYS(m));
 
 	} else if (ptepindex >= NUPDE) {
 		vm_pindex_t pml1index;
@@ -4008,7 +4008,7 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 
 		/* Now find the pdp page */
 		l2e = &l2e[pdpindex & RPTE_MASK];
-		*l2e = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
+		pde_store(l2e, VM_PAGE_TO_PHYS(m));
 
 	} else {
 		vm_pindex_t pml1index;
@@ -4056,7 +4056,7 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 
 		/* Now we know where the page directory page is */
 		l3e = &l3e[ptepindex & RPTE_MASK];
-		*l3e = VM_PAGE_TO_PHYS(m) | RPTE_VALID | RPTE_SHIFT;
+		pde_store(l3e, VM_PAGE_TO_PHYS(m));
 	}
 
 	pmap_resident_count_inc(pmap, 1);
@@ -4174,8 +4174,10 @@ retry:
 		    va < eva; va += PAGE_SIZE, m++)
 			vm_page_dirty(m);
 	}
-	if ((prot & VM_PROT_WRITE) == 0)
+	if ((prot & VM_PROT_WRITE) == 0) {
 		newpde &= ~(PG_RW | PG_M);
+		newpde |= RPTE_EAA_R;
+	}
 	if (prot & VM_PROT_EXECUTE)
 		newpde |= PG_X;
 	if (newpde != oldpde) {
@@ -4310,6 +4312,7 @@ retry:
 					vm_page_dirty(m);
 				}
 				pbits &= ~(PG_RW | PG_M);
+				pbits |= RPTE_EAA_R;
 			}
 			if (prot & VM_PROT_EXECUTE)
 				pbits |= PG_X;
@@ -4686,7 +4689,6 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 static void
 pmap_remove_kernel_l3e(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va)
 {
-	pml3_entry_t newpde;
 	vm_paddr_t mptepa;
 	vm_page_t mpte;
 
@@ -4697,7 +4699,6 @@ pmap_remove_kernel_l3e(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va)
 		panic("pmap_remove_kernel_pde: Missing pt page.");
 
 	mptepa = VM_PAGE_TO_PHYS(mpte);
-	newpde = mptepa | RPTE_SHIFT | PG_V;
 
 	/*
 	 * Initialize the page table page.
@@ -4707,7 +4708,7 @@ pmap_remove_kernel_l3e(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va)
 	/*
 	 * Demote the mapping.
 	 */
-	pte_store(l3e, newpde);
+	pde_store(l3e, mptepa);
 }
 
 /*
@@ -5366,8 +5367,9 @@ retry_pv_loop:
 retry:
 		oldpte = *pte;
 		if (oldpte & PG_RW) {
-			if (!atomic_cmpset_long(pte, oldpte, oldpte &
-			    ~(PG_RW | PG_M)))
+			if (!atomic_cmpset_long(pte, oldpte,
+									(oldpte | RPTE_EAA_R) &
+									~(PG_RW | PG_M)))
 				goto retry;
 			if ((oldpte & PG_M) != 0)
 				vm_page_dirty(m);
@@ -5935,8 +5937,7 @@ pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va)
 		return;
 	}
 	pte = pmap_l3e_to_pte(l3e, va);
-	db_printf(" pte %#016lx pm_pid %lx\n", *pte,
-			  mfspr(SPR_PID));
+	db_printf(" pte %#016lx\n", *pte);
 }
 
 void
