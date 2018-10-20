@@ -3275,8 +3275,6 @@ static int
 radix_pgd_import(void *arg __unused, void **store, int count, int domain __unused,
     int flags)
 {
-	printf("%s(%p, %p, %d, %d, %x)\n",
-		   __func__, arg, store, count, domain, flags);
 	
 	for (int i = 0; i < count; i++) {
 		vm_page_t m = vm_page_alloc_contig(NULL, 0, VM_ALLOC_NORMAL | VM_ALLOC_NOOBJ |
@@ -3284,7 +3282,6 @@ radix_pgd_import(void *arg __unused, void **store, int count, int domain __unuse
 		    0, (vm_paddr_t)-1, RADIX_PGD_SIZE, L1_PAGE_SIZE, VM_MEMATTR_DEFAULT);
 		/* XXX zero on alloc here so we don't have to later */
 		store[i] = (void *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(m));
-		printf("allocated %p\n", store[i]);
 	}
 	return (count);
 }
@@ -3562,7 +3559,6 @@ METHOD(ts_referenced) vm_page_t m)
 	int cleared, md_gen, not_cleared, pvh_gen;
 	struct spglist free;
 
-	printf("%s(%p/%#lx)\n", __func__, m, m->phys_addr);
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	KASSERT((m->oflags & VPO_UNMANAGED) == 0,
 	    ("pmap_ts_referenced: page %p is not managed", m));
@@ -3926,7 +3922,7 @@ mmu_radix_pmap_pinit(pmap_t pmap)
 		uma_zfree(zone_radix_pgd, pmap->pm_pml1);
 		return (0);
 	}
-	printf("allocated pid=%lu\n", pid);
+
 	pmap->pm_pid = pid;
 	l1pa = DMAP_TO_PHYS((vm_offset_t)pmap->pm_pml1);
 	isa3_proctab[pid].proctab0 = htobe64(RTS_SIZE |  l1pa | RADIX_PGD_INDEX_SHIFT);
@@ -4835,9 +4831,6 @@ pmap_remove_page(pmap_t pmap, vm_offset_t va, pml3_entry_t *l3e,
 	struct rwlock *lock;
 	pt_entry_t *pte;
 
-	printf("%s(%p, %lx, %p, %p)\n",
-		   __func__, pmap, va, l3e, free);
-
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
 	if ((*l3e & RPTE_VALID) == 0) {
 		return;
@@ -4916,7 +4909,6 @@ mmu_radix_pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 	/* XXX something fishy here */
 	sva = (sva + PAGE_MASK) & ~PAGE_MASK;
 	eva = (eva + PAGE_MASK) & ~PAGE_MASK;
-	printf("%s(%p, %lx, %lx)\n", __func__, pmap, sva, eva);
 
 	pmap_delayed_invl_started(&et);
 	PMAP_LOCK(pmap);
@@ -5587,7 +5579,9 @@ METHOD(activate) struct thread *td)
 			curpid != pmap->pm_pid) {
 			mmu_radix_pid_set(pmap);
 			PCPU_SET(asid, pmap->pm_pid);
+#ifdef VERBOSE_PMAP
 			printf("activated pid=%lu\n", pmap->pm_pid);
+#endif			
 		}
 	}
 	critical_exit();
