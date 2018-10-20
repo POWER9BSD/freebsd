@@ -1039,6 +1039,12 @@ pmap_pvh_remove(struct md_page *pvh, pmap_t pmap, vm_offset_t va)
 	pv_entry_t pv;
 
 	TAILQ_FOREACH(pv, &pvh->pv_list, pv_next) {
+		if (PV_PMAP(pv) == NULL) {
+			printf("corrupted pv_chunk/pv %p\n", pv);
+			printf("pv_chunk: %64D\n", pv_to_chunk(pv), ":");
+		}
+		MPASS(PV_PMAP(pv) != NULL);
+		MPASS(pv->pv_va != 0);
 		if (pmap == PV_PMAP(pv) && va == pv->pv_va) {
 			TAILQ_REMOVE(&pvh->pv_list, pv, pv_next);
 			pvh->pv_gen++;
@@ -1341,6 +1347,10 @@ free_pv_entry(pmap_t pmap, pv_entry_t pv)
 	struct pv_chunk *pc;
 	int idx, field, bit;
 
+#ifdef VERBOSE_PMAP
+	if (pmap != kernel_pmap)
+		printf("%s(%p, %p)\n", __func__, pmap, pv);
+#endif
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
 	PV_STAT(atomic_add_long(&pv_entry_frees, 1));
 	PV_STAT(atomic_add_int(&pv_entry_spare, 1));
@@ -1420,6 +1430,7 @@ retry:
 			}
 			PV_STAT(atomic_add_long(&pv_entry_count, 1));
 			PV_STAT(atomic_subtract_int(&pv_entry_spare, 1));
+			MPASS(PV_PMAP(pv) != NULL);
 			return (pv);
 		}
 	}
@@ -1450,6 +1461,7 @@ retry:
 	TAILQ_INSERT_HEAD(&pmap->pm_pvchunk, pc, pc_list);
 	PV_STAT(atomic_add_long(&pv_entry_count, 1));
 	PV_STAT(atomic_add_int(&pv_entry_spare, _NPCPV - 1));
+	MPASS(PV_PMAP(pv) != NULL);
 	return (pv);
 }
 
@@ -2142,7 +2154,6 @@ METHOD(clear_modify) vm_page_t m)
 	vm_offset_t va;
 	int md_gen, pvh_gen;
 
-	UNTESTED();
 	KASSERT((m->oflags & VPO_UNMANAGED) == 0,
 	    ("pmap_clear_modify: page %p is not managed", m));
 	VM_OBJECT_ASSERT_WLOCKED(m->object);
@@ -2422,7 +2433,9 @@ pmap_promote_l3e(pmap_t pmap, pml3_entry_t *pde, vm_offset_t va,
 	vm_page_t mpte;
 
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
-
+#ifndef FULL_FEATURED
+	panic("don't call me!");
+#endif
 	/*
 	 * Examine the first PTE in the specified PTP.  Abort if this PTE is
 	 * either invalid, unused, or does not map the first 4KB physical page
@@ -2530,14 +2543,6 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	int rv, retrycount;
 	boolean_t nosleep;
 
-#if 0
-	if (pmap != kernel_pmap) {
-		printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- asid=%lu curpid=%d name=%s\n",
-			   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
-			   curproc->p_comm);
-		pmap_pte_walk(pmap->pm_pml1, va);
-	}
-#endif
 	va = trunc_page(va);
 	retrycount = 0;
 	CTR6(KTR_PMAP, "pmap_enter(%p, %#lx, %p, %#x, %#x, %d)", pmap, va,
@@ -2636,6 +2641,12 @@ retry:
 	 * Is the specified virtual address already mapped?
 	 */
 	if ((origpte & PG_V) != 0) {
+#ifdef VERBOSE_PMAP
+		printf("cow fault pmap_enter(%p, %#lx, %p, %#x, %x, %d) --"
+			   " asid=%lu curpid=%d name=%s origpte0x%lx\n",
+			   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
+			   curproc->p_comm, origpte);		
+#endif
 		/*
 		 * Wiring change, just update stats. We don't worry about
 		 * wiring PT pages as they remain resident as long as there
@@ -2720,6 +2731,15 @@ retry:
 			pmap_invalidate_page(pmap, va);
 		origpte = 0;
 	} else {
+		if (pmap != kernel_pmap) {
+#ifdef VERBOSE_PMAP
+			printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- asid=%lu curpid=%d name=%s\n",
+				   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
+				   curproc->p_comm);
+			pmap_pte_walk(pmap->pm_pml1, va);
+#endif
+		}
+
 		/*
 		 * Increment the counters.
 		 */
@@ -2736,6 +2756,11 @@ retry:
 			pv = get_pv_entry(pmap, &lock);
 			pv->pv_va = va;
 		}
+#ifdef VERBOSE_PMAP
+		else
+			printf("reassigning pv: %p to pmap: %p\n",
+				   pv, pmap);
+#endif
 		CHANGE_PV_LIST_LOCK_TO_PHYS(&lock, pa);
 		TAILQ_INSERT_TAIL(&m->md.pv_list, pv, pv_next);
 		m->md.pv_gen++;
@@ -3259,8 +3284,8 @@ radix_pgd_import(void *arg __unused, void **store, int count, int domain __unuse
 		    0, (vm_paddr_t)-1, RADIX_PGD_SIZE, L1_PAGE_SIZE, VM_MEMATTR_DEFAULT);
 		/* XXX zero on alloc here so we don't have to later */
 		store[i] = (void *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(m));
+		printf("allocated %p\n", store[i]);
 	}
-	printf("%s done\n", __func__);
 	return (count);
 }
 
@@ -3537,6 +3562,7 @@ METHOD(ts_referenced) vm_page_t m)
 	int cleared, md_gen, not_cleared, pvh_gen;
 	struct spglist free;
 
+	printf("%s(%p/%#lx)\n", __func__, m, m->phys_addr);
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	KASSERT((m->oflags & VPO_UNMANAGED) == 0,
 	    ("pmap_ts_referenced: page %p is not managed", m));
@@ -3889,8 +3915,8 @@ mmu_radix_pmap_pinit(pmap_t pmap)
 	 */
 	pmap->pm_pml1 = uma_zalloc(zone_radix_pgd, M_WAITOK);
 
-	for (int j = 0; j <  RADIX_PGD_SIZE/PAGE_SIZE; j++)
-		pagezero(pmap->pm_pml1 + j*PAGE_SIZE);
+	for (int j = 0; j <  RADIX_PGD_SIZE_SHIFT; j++)
+		pagezero(((caddr_t)pmap->pm_pml1) + j*PAGE_SIZE);
 	pmap->pm_root.rt_root = 0;
 	TAILQ_INIT(&pmap->pm_pvchunk);
 	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
@@ -4586,6 +4612,9 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	struct spglist free;
 	vm_offset_t sva;
 
+#ifndef FULL_FEATURED
+	panic("don't call me!");
+#endif
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
 	oldpde = *l3e;
 	KASSERT((oldpde & (RPTE_LEAF | PG_V)) == (RPTE_LEAF | PG_V),
@@ -5266,6 +5295,10 @@ METHOD(remove_pages) pmap_t pmap)
 					}
 				} else {
 					pmap_resident_count_dec(pmap, 1);
+#ifdef VERBOSE_PMAP
+					printf("freeing pv (%p, %p)\n",
+						   pmap, pv);
+#endif
 					TAILQ_REMOVE(&m->md.pv_list, pv, pv_next);
 					m->md.pv_gen++;
 					if ((m->aflags & PGA_WRITEABLE) != 0 &&
@@ -5404,7 +5437,6 @@ METHOD(unwire) pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 	pt_entry_t *pte;
 
 	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, pmap, start, end);
-	UNTESTED();
 	PMAP_LOCK(pmap);
 	for (; sva < eva; sva = va_next) {
 		l1e = pmap_pml1e(pmap, sva);
@@ -5479,9 +5511,12 @@ METHOD(zero_page) vm_page_t m)
 VISIBILITY void
 METHOD(zero_page_area) vm_page_t m, int off, int size)
 {
+	caddr_t addr;
 
 	CTR4(KTR_PMAP, "%s(%p, %d, %d)", __func__, m, off, size);
-	UNIMPLEMENTED();
+	MPASS(off + size <= PAGE_SIZE);
+	addr = (caddr_t)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(m));
+	memset(addr + off, 0, size);
 }
 
 VISIBILITY int
@@ -5953,8 +5988,10 @@ pmap_page_print_mappings(vm_page_t m)
 		db_printf("va: %#016lx ", pv->pv_va);
 		pmap = PV_PMAP(pv);
 		db_printf("pmap %p  ", pmap);
-		if (pmap != NULL)
+		if (pmap != NULL) {
+			db_printf("asid: %lu\n", pmap->pm_pid);
 			pmap_pte_walk(pmap->pm_pml1, pv->pv_va);
+		}
 	}
 }
 
