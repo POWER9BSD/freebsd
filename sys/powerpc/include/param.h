@@ -123,7 +123,7 @@
 
 #ifndef KSTACK_PAGES
 #ifdef __powerpc64__
-#define	KSTACK_PAGES		8		/* includes pcb */
+#define	KSTACK_PAGES		12		/* includes pcb */
 #else
 #define	KSTACK_PAGES		4		/* includes pcb */
 #endif
