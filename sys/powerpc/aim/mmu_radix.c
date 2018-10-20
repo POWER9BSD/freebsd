@@ -95,10 +95,8 @@ __FBSDID("$FreeBSD$");
 static void pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va);
 #endif
 
+#define FULL_FEATURED 0
 
-/*
- *
- */
 static int nkpt = 64;
 SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
     "Number of kernel page table pages allocated on bootup");
@@ -106,7 +104,7 @@ SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
 
 static SYSCTL_NODE(_vm, OID_AUTO, pmap, CTLFLAG_RD, 0, "VM/pmap parameters");
 
-static int pg_ps_enabled = 1;
+static int pg_ps_enabled = FULL_FEATURED;
 SYSCTL_INT(_vm_pmap, OID_AUTO, pg_ps_enabled, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
     &pg_ps_enabled, 0, "Are large page mappings enabled?");
 
@@ -613,8 +611,8 @@ pa_cmp(const void *a, const void *b)
 		*(u_long *)(ptep) = (u_long)(pa|RPTE_VALID|RPTE_SHIFT); \
 } while (0)
 
-#define	pte_clear(ptep) do {	   \
-	*(u_long *)(ptep) = (u_long)(0); \
+#define	pte_clear(ptep) do {					\
+		*(u_long *)(ptep) = (u_long)(0);		\
 } while (0)
 
 
@@ -631,7 +629,6 @@ pa_cmp(const void *a, const void *b)
 #define PG_A	RPTE_R
 #define PG_X	RPTE_EAA_X
 #define PG_RW	(RPTE_EAA_R| RPTE_EAA_W)
-#define PG_PS	RPTE_LEAF
 #define PG_PTE_CACHE RPTE_ATTR_MASK
 
 
@@ -2238,7 +2235,9 @@ METHOD(copy) pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 	vm_offset_t va_next;
 	vm_page_t dst_pdpg, dstmpte, srcmpte;
 
-
+#if FULL_FEATURED==0
+	return;
+#endif
 	CTR6(KTR_PMAP, "%s(%p, %p, %#x, %#x, %#x)", __func__, dst_pmap,
 	    src_pmap, dst_addr, len, src_addr);
 
@@ -2699,6 +2698,14 @@ retry:
 			pv = pmap_pvh_remove(&om->md, pmap, va);
 			if ((newpte & PG_MANAGED) == 0)
 				free_pv_entry(pmap, pv);
+#ifdef INVARIANTS
+			else if (origpte & PG_MANAGED) {
+				if (pv == NULL) {
+					pmap_page_print_mappings(om);
+					MPASS(pv != NULL);
+				}
+			}
+#endif
 			if ((om->aflags & PGA_WRITEABLE) != 0 &&
 			    TAILQ_EMPTY(&om->md.pv_list) &&
 			    ((om->flags & PG_FICTITIOUS) != 0 ||
@@ -3013,7 +3020,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 			 * attempt fails, we don't retry.  Instead, we give up.
 			 */
 			if (ptepa && (*ptepa & PG_V) != 0) {
-				if (*ptepa & PG_PS)
+				if (*ptepa & RPTE_LEAF)
 					return (NULL);
 				mpte = PHYS_TO_VM_PAGE(*ptepa & PG_FRAME);
 				mpte->wire_count++;
@@ -3068,17 +3075,15 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	 */
 	pmap_resident_count_inc(pmap, 1);
 
-	pa = VM_PAGE_TO_PHYS(m) | RPTE_LEAF | pmap_cache_bits(pmap, m->md.pat_mode, 0);
+	pa = VM_PAGE_TO_PHYS(m) | pmap_cache_bits(pmap, m->md.pat_mode, 0);
 	if (prot & VM_PROT_EXECUTE)
 		pa |= PG_X;
-
-	/*
-	 * Now validate mapping with RO protection
-	 */
-	if ((m->oflags & VPO_UNMANAGED) != 0)
-		pte_store(pte, pa | PG_V);
 	else
-		pte_store(pte, pa | PG_V | PG_MANAGED);
+		pa |= RPTE_EAA_R;
+	if ((m->oflags & VPO_UNMANAGED) == 0)
+		pa |= PG_MANAGED;
+
+	pte_store(pte, pa);
 	return (mpte);
 }
 
@@ -3475,6 +3480,9 @@ METHOD(is_prefaultable) pmap_t pmap, vm_offset_t addr)
 	pt_entry_t *pte;
 	boolean_t rv;
 
+#if FULL_FEATURED==0
+	return (FALSE);
+#endif
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, pmap, addr);
 	rv = FALSE;
 	PMAP_LOCK(pmap);
@@ -4099,7 +4107,7 @@ retry:
 	 * This supports switching from a 2MB page to a
 	 * normal 4K page.
 	 */
-	if (pd != NULL && (*pd & (PG_PS | PG_V)) == (PG_PS | PG_V)) {
+	if (pd != NULL && (*pd & (RPTE_LEAF | PG_V)) == (RPTE_LEAF | PG_V)) {
 		if (!pmap_demote_l3e_locked(pmap, pd, va, lockp)) {
 			/*
 			 * Invalidation of the 2MB page mapping may have caused
@@ -4620,7 +4628,7 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	    ("pmap_demote_l3e: oldpde is missing PG_A"));
 	KASSERT((oldpde & (PG_M | PG_RW)) != PG_RW,
 	    ("pmap_demote_l3e: oldpde is missing PG_M"));
-	newpte = oldpde & ~PG_PS;
+	newpte = oldpde & ~RPTE_LEAF;
 
 	/*
 	 * If the page table page is new, initialize it.
@@ -4869,10 +4877,9 @@ mmu_radix_pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 	/*
 	 * Perform an unsynchronized read.  This is, however, safe.
 	 */
-	if (pmap->pm_stats.resident_count == 0) {
-		printf("resident count is zero\n");
+	if (pmap->pm_stats.resident_count == 0)
 		return;
-	}
+
 	anyvalid = 0;
 	SLIST_INIT(&free);
 
@@ -5181,9 +5188,9 @@ METHOD(remove_pages) pmap_t pmap)
 					/*
 					 * Keep track whether 'tpte' is a
 					 * superpage explicitly instead of
-					 * relying on PG_PS being set.
+					 * relying on RPTE_LEAF being set.
 					 *
-					 * This is because PG_PS is numerically
+					 * This is because RPTE_LEAF is numerically
 					 * identical to PG_PTE_PAT and thus a
 					 * regular page could be mistaken for
 					 * a superpage.
