@@ -260,6 +260,7 @@ trap(struct trapframe *frame)
 #if defined(__powerpc64__) && defined(AIM)
 		case EXC_ISE:
 		case EXC_DSE:
+			trap_fatal(frame);
 			if (handle_user_slb_spill(&p->p_vmspace->vm_pmap,
 			    (type == EXC_ISE) ? frame->srr0 : frame->dar) != 0){
 				sig = SIGSEGV;
@@ -544,8 +545,9 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 	    frame->lr, frame->lr - (register_t)(__startkernel - KERNBASE));
 	printf("   curthread       = %p\n", curthread);
 	if (curthread != NULL)
-		printf("          pid = %d, comm = %s\n",
-		    curthread->td_proc->p_pid, curthread->td_name);
+		printf("          pid = %d, comm = %s asid: %lu\n",
+			   curthread->td_proc->p_pid, curthread->td_name,
+			   vmspace_pmap(curthread->td_proc->p_vmspace)->pm_pid);
 	printf("\n");
 }
 
@@ -624,8 +626,9 @@ cpu_fetch_syscall_args(struct thread *td)
 
  	if (p->p_sysent->sv_mask)
 		sa->code &= p->p_sysent->sv_mask;
-	printf("%s:%d %s()\n",
-		   td->td_proc->p_comm, td->td_proc->p_pid, syscallnames[sa->code]);
+	if (sa->code != 3 && sa->code != 116)
+		printf("%s:%d %s()\n",
+			   td->td_proc->p_comm, td->td_proc->p_pid, syscallnames[sa->code]);
 	if (sa->code >= p->p_sysent->sv_size)
 		sa->callp = &p->p_sysent->sv_table[0];
 	else
@@ -832,6 +835,7 @@ trap_pfault(struct trapframe *frame, int user)
 		return (0);
 
 	printf("%s vm_fault=>rv = %d\n", __func__, rv);
+	printtrap(frame->exc, frame, 0, (frame->srr1 & PSL_PR));
 	if (!user && handle_onfault(frame))
 		return (0);
 
