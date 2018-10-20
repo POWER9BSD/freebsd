@@ -604,7 +604,7 @@ pa_cmp(const void *a, const void *b)
 #define	pte_load_store(ptep, pte)	atomic_swap_long(ptep, pte)
 #define	pte_load_clear(ptep)		atomic_swap_long(ptep, 0)	
 #define	pte_store(ptep, pte) do {	   \
-	*(u_long *)(ptep) = (u_long)(pte); \
+	*(u_long *)(ptep) = (u_long)(pte | PG_V | RPTE_LEAF); \
 } while (0)
 /*
  * NB: should only be used for adding directories - not for direct mappings
@@ -613,7 +613,10 @@ pa_cmp(const void *a, const void *b)
 		*(u_long *)(ptep) = (u_long)(pa|RPTE_VALID|RPTE_SHIFT); \
 } while (0)
 
-#define	pte_clear(ptep)			pte_store(ptep, 0)
+#define	pte_clear(ptep) do {	   \
+	*(u_long *)(ptep) = (u_long)(0); \
+} while (0)
+
 
 #define	PTESYNC()	__asm __volatile("ptesync");
 #define	TLBSYNC()	__asm __volatile("tlbsync; ptesync");
@@ -5927,6 +5930,24 @@ pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va)
 	pte = pmap_l3e_to_pte(l3e, va);
 	db_printf(" pte %#016lx pm_pid %lx\n", *pte,
 			  mfspr(SPR_PID));
+}
+
+void
+pmap_page_print_mappings(vm_page_t m)
+{
+	pmap_t pmap;
+	pv_entry_t pv;
+
+	db_printf("page %p(%lx)\n", m, m->phys_addr);
+	/* need to elide locks if running in ddb */
+	TAILQ_FOREACH(pv, &m->md.pv_list, pv_next) {
+		db_printf("pv: %p ", pv);
+		db_printf("va: %#016lx ", pv->pv_va);
+		pmap = PV_PMAP(pv);
+		db_printf("pmap %p  ", pmap);
+		if (pmap != NULL)
+			pmap_pte_walk(pmap->pm_pml1, pv->pv_va);
+	}
 }
 
 DB_SHOW_COMMAND(pte, pmap_print_pte)
