@@ -651,10 +651,17 @@ pa_cmp(const void *a, const void *b)
 
 
 static __inline void
-TLBIE(uint64_t vpn) {
-	__asm __volatile("tlbie %0" :: "r"(vpn) : "memory");
+ttusync(void)
+{
 	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
 }
+
+static __inline void
+TLBIE(uint64_t vpn) {
+	__asm __volatile("tlbie %0" :: "r"(vpn) : "memory");
+	ttusync();
+}
+
 
 static __inline int
 cntlzd(uint64_t word)
@@ -1932,7 +1939,7 @@ mmu_parttab_update(uint64_t lpid, uint64_t pagetab, uint64_t proctab)
 		__asm __volatile(PPC_TLBIE_5(%0,%1,2,0,0) : :
 			     "r" (TLBIEL_INVAL_SET_LPID), "r" (lpid));
 	}
-	__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
+	ttusync();
 }
 
 static void
@@ -2088,8 +2095,10 @@ maybe_invlrng:
 		if (va != va_next)
 			pmap_invalidate_range(pmap, va, sva);
 	}
-	if (anychanged)
+	if (anychanged) {
+		ttusync();
 		pmap_invalidate_all(pmap);
+	}
 	PMAP_UNLOCK(pmap);
 	pmap_delayed_invl_finished(&et);
 }
@@ -2243,6 +2252,7 @@ restart:
 							(oldpte | RPTE_EAA_R) & ~(PG_M | PG_RW)))
 							   oldpte = *pte;
 						vm_page_dirty(m);
+						ttusync();
 						pmap_invalidate_page(pmap, va);
 					}
 				}
@@ -2269,6 +2279,7 @@ restart:
 		pte = pmap_l3e_to_pte(l3e, pv->pv_va);
 		if ((*pte & (PG_M | PG_RW)) == (PG_M | PG_RW)) {
 			atomic_clear_long(pte, PG_M);
+			ttusync();
 			pmap_invalidate_page(pmap, pv->pv_va);
 		}
 		PMAP_UNLOCK(pmap);
@@ -2847,6 +2858,7 @@ unchanged:
 
 	rv = KERN_SUCCESS;
 out:
+	ttusync();
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
@@ -3038,6 +3050,7 @@ METHOD(enter_object) pmap_t pmap, vm_offset_t start, vm_offset_t end,
 			    mpte, &lock);
 		m = TAILQ_NEXT(m, listq);
 	}
+	ttusync();
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
@@ -3158,6 +3171,7 @@ METHOD(enter_quick) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot)
 	lock = NULL;
 	PMAP_LOCK(pmap);
 	(void)pmap_enter_quick_locked(pmap, va, m, prot, NULL, &lock);
+	ttusync();
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
@@ -3815,6 +3829,7 @@ METHOD(object_init_pt) pmap_t pmap, vm_offset_t addr, vm_object_t object,
 		}
 		PMAP_UNLOCK(pmap);
 	}
+	ttusync();
 }
 
 
@@ -4407,7 +4422,7 @@ METHOD(qenter) vm_offset_t sva, vm_page_t *ma, int count)
 		}
 		pte++;
 	}
-	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
+	ttusync();
 	if (__predict_false((oldpte & RPTE_VALID) != 0))
 		pmap_invalidate_range(kernel_pmap, sva, sva + count *
 		    PAGE_SIZE);
@@ -4732,6 +4747,7 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	if ((oldpde & PG_MANAGED) != 0)
 		pmap_pv_demote_l3e(pmap, va, oldpde & PG_PS_FRAME, lockp);
 
+	ttusync();
 	atomic_add_long(&pmap_l3e_demotions, 1);
 	CTR2(KTR_PMAP, "pmap_demote_l3e: success for va %#lx"
 	    " in pmap %p", va, pmap);
@@ -5661,7 +5677,7 @@ mmu_radix_pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 		tmpva += PAGE_SIZE;
 		ppa += PAGE_SIZE;
 	}
-	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
+	ttusync();
 
 	return ((void *)(va + offset));
 }
