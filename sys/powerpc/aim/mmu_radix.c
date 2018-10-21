@@ -3697,6 +3697,10 @@ METHOD(map) vm_offset_t *virt __unused, vm_paddr_t start, vm_paddr_t end, int pr
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %#x, %#x)", __func__, virt, start, end,
 		 prot);
+#ifdef DDB
+	printf("pmap_map(%lx, %lx)\n", start, end);
+	pmap_pte_walk(kernel_pmap->pm_pml1, PHYS_TO_DMAP(start));
+#endif	
 	return (PHYS_TO_DMAP(start));
 }
 
