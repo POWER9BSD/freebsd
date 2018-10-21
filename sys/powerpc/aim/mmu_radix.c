@@ -5642,6 +5642,9 @@ mmu_radix_pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 	size = roundup2(offset + size, PAGE_SIZE);
 
 	va = kva_alloc(size);
+	if (bootverbose)
+		printf("%s(%#lx, %lu, %d)\n", __func__, pa, size, attr);
+	KASSERT(size > 0, ("%s(%#lx, %lu, %d)", __func__, pa, size, attr));
 
 	if (!va)
 		panic("%s: Couldn't alloc kernel virtual memory", __func__);
@@ -5787,10 +5790,11 @@ mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma)
 
 	pte = kvtopte(va);
 	MPASS(pte != NULL);
-	pteval = pa | RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
+	pteval = pa | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
 	cache_bits = mmu_radix_calc_wimg(pa, ma);
-	printf("cache_bits=%lx\n", cache_bits);
 	pte_store(pte, pteval | cache_bits);
+	if (bootverbose)
+		printf("va/*pte %#lx/%#lx\n", va, *pte);
 }
 
 VISIBILITY void
