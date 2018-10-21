@@ -890,7 +890,23 @@ mmu_radix_pmap_kenter(vm_offset_t va, vm_paddr_t pa)
  * caching mode.
  */
 
-#define pmap_cache_bits(pmap, mode, is_pde) (0)
+static int
+pmap_cache_bits(vm_memattr_t ma)
+{
+	if (ma != VM_MEMATTR_DEFAULT) {
+		switch (ma) {
+		case VM_MEMATTR_UNCACHEABLE:
+			return (RPTE_ATTR_GUARDEDIO);
+		case VM_MEMATTR_CACHEABLE:
+			return (RPTE_ATTR_MEM);
+		case VM_MEMATTR_WRITE_COMBINING:
+		case VM_MEMATTR_WRITE_BACK:
+		case VM_MEMATTR_PREFETCHABLE:
+			return (RPTE_ATTR_UNGUARDEDIO);
+		}
+	}
+	return (0);
+}
 
 static void
 pmap_invalidate_page(pmap_t pmap, vm_offset_t start)
@@ -2578,9 +2594,7 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 		newpte |= PG_W;
 	if (va > DMAP_MIN_ADDRESS)
 		newpte |= RPTE_EAA_P;
-#if 0
-	newpte |= pmap_cache_bits(pmap, m->md.pat_mode, psind > 0);
-#endif
+	newpte |= pmap_cache_bits(m->md.mdpg_cache_attrs);
 	/*
 	 * Set modified bit gratuitously for writeable mappings if
 	 * the page is unmanaged. We do not want to take a fault
@@ -2843,7 +2857,7 @@ pmap_enter_2mpage(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	pml3_entry_t newpde;
 
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
-	newpde = VM_PAGE_TO_PHYS(m) | /* pmap_cache_bits(pmap, m->md.pat_mode, 1) | */
+	newpde = VM_PAGE_TO_PHYS(m) | pmap_cache_bits(m->md.mdpg_cache_attrs) |
 	    RPTE_LEAF | PG_V;
 	if ((m->oflags & VPO_UNMANAGED) == 0)
 		newpde |= PG_MANAGED;
@@ -3106,7 +3120,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	 */
 	pmap_resident_count_inc(pmap, 1);
 
-	pa = VM_PAGE_TO_PHYS(m) | pmap_cache_bits(pmap, m->md.pat_mode, 0);
+	pa = VM_PAGE_TO_PHYS(m) | pmap_cache_bits(m->md.mdpg_cache_attrs);
 	if (prot & VM_PROT_EXECUTE)
 		pa |= PG_X;
 	else
@@ -3706,7 +3720,7 @@ METHOD(object_init_pt) pmap_t pmap, vm_offset_t addr, vm_object_t object,
 	pml3_entry_t *l3e;
 	vm_paddr_t pa, ptepa;
 	vm_page_t p, pdpg;
-	int pat_mode;
+	vm_memattr_t ma;
 
 	UNTESTED(); /* fix up */
 
@@ -3724,7 +3738,7 @@ METHOD(object_init_pt) pmap_t pmap, vm_offset_t addr, vm_object_t object,
 		p = vm_page_lookup(object, pindex);
 		KASSERT(p->valid == VM_PAGE_BITS_ALL,
 		    ("pmap_object_init_pt: invalid page %p", p));
-		pat_mode = p->md.mdpg_cache_attrs;
+		ma = p->md.mdpg_cache_attrs;
 
 		/*
 		 * Abort the mapping if the first page is not physically
@@ -3745,18 +3759,13 @@ METHOD(object_init_pt) pmap_t pmap, vm_offset_t addr, vm_object_t object,
 			KASSERT(p->valid == VM_PAGE_BITS_ALL,
 			    ("pmap_object_init_pt: invalid page %p", p));
 			if (pa != VM_PAGE_TO_PHYS(p) ||
-			    pat_mode != p->md.mdpg_cache_attrs)
+			    ma != p->md.mdpg_cache_attrs)
 				return;
 			p = TAILQ_NEXT(p, listq);
 		}
 
-		/*
-		 * Map using 2MB pages.  Since "ptepa" is 2M aligned and
-		 * "size" is a multiple of 2M, adding the PAT setting to "pa"
-		 * will not affect the termination of this loop.
-		 */ 
 		PMAP_LOCK(pmap);
-		for (pa = ptepa | pmap_cache_bits(pmap, pat_mode, 1);
+		for (pa = ptepa | pmap_cache_bits(ma);
 		    pa < ptepa + size; pa += L3_PAGE_SIZE) {
 			pdpg = pmap_allocl3e(pmap, addr, NULL);
 			if (pdpg == NULL) {
@@ -4369,13 +4378,10 @@ METHOD(qenter) vm_offset_t sva, vm_page_t *ma, int count)
 	oldpte = 0;
 	pte = kvtopte(sva);
 	endpte = pte + count;
-	cache_bits = 0;
 	attr_bits = RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
 	while (pte < endpte) {
 		m = *ma++;
-#if 0
-		cache_bits = pmap_cache_bits(kernel_pmap, m->md.pat_mode, 0);
-#endif	
+		cache_bits = pmap_cache_bits(m->md.mdpg_cache_attrs);
 		pa = VM_PAGE_TO_PHYS(m) | cache_bits | attr_bits;
 		if (*pte != pa) {
 			oldpte |= *pte;
@@ -4383,7 +4389,7 @@ METHOD(qenter) vm_offset_t sva, vm_page_t *ma, int count)
 		}
 		pte++;
 	}
-
+	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
 	if (__predict_false((oldpte & RPTE_VALID) != 0))
 		pmap_invalidate_range(kernel_pmap, sva, sva + count *
 		    PAGE_SIZE);
@@ -5646,6 +5652,7 @@ mmu_radix_pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 		tmpva += PAGE_SIZE;
 		ppa += PAGE_SIZE;
 	}
+	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
 
 	return ((void *)(va + offset));
 }
@@ -5672,7 +5679,17 @@ METHOD(page_set_memattr) vm_page_t m, vm_memattr_t ma)
 {
 
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, m, ma);
-	UNIMPLEMENTED();
+	m->md.mdpg_cache_attrs = ma;
+
+	/*
+	 * If "m" is a normal page, update its direct mapping.  This update
+	 * can be relied upon to perform any cache operations that are
+	 * required for data coherence.
+	 */
+	if ((m->flags & PG_FICTITIOUS) == 0 &&
+	    pmap_change_attr(PHYS_TO_DMAP(VM_PAGE_TO_PHYS(m)), PAGE_SIZE,
+	    m->md.mdpg_cache_attrs))
+		panic("memory attribute change on the direct map failed");
 }
 
 VISIBILITY void
@@ -5915,9 +5932,17 @@ METHOD(quick_remove_page) vm_offset_t addr)
 VISIBILITY int
 METHOD(change_attr) vm_offset_t addr, vm_size_t size, vm_memattr_t mode)
 {
-	CTR4(KTR_PMAP, "%s(%#x, %#zx, %d)", __func__, addr, size, mode);
 	UNIMPLEMENTED();
 	return (0);
+#if 0	
+	int error;
+	CTR4(KTR_PMAP, "%s(%#x, %#zx, %d)", __func__, addr, size, mode);
+
+	PMAP_LOCK(kernel_pmap);
+	error = pmap_change_attr_locked(va, size, mode);
+	PMAP_UNLOCK(kernel_pmap);
+	return (error);
+#endif
 }
 
 #ifdef MMU_DIRECT
