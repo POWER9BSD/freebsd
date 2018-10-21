@@ -197,6 +197,7 @@ static int mmu_radix_map_user_ptr(mmu_t mmu, pmap_t pm,
     volatile const void *uaddr, void **kaddr, size_t ulen, size_t *klen);
 static int mmu_radix_decode_kernel_ptr(mmu_t mmu, vm_offset_t addr,
     int *is_user, vm_offset_t *decoded_addr);
+static void	mmu_radix_cpu_bootstrap(mmu_t, int ap);
 
 static mmu_method_t mmu_radix_methods[] = {
 	MMUMETHOD(mmu_activate,		mmu_radix_activate),
@@ -208,6 +209,7 @@ static mmu_method_t mmu_radix_methods[] = {
 	MMUMETHOD(mmu_copy,	mmu_radix_copy),
 	MMUMETHOD(mmu_copy_page,	mmu_radix_copy_page),
 	MMUMETHOD(mmu_copy_pages,	mmu_radix_copy_pages),
+	MMUMETHOD(mmu_cpu_bootstrap,	mmu_radix_cpu_bootstrap),
 	MMUMETHOD(mmu_deactivate,      	mmu_radix_deactivate),
 	MMUMETHOD(mmu_enter,		mmu_radix_enter),
 	MMUMETHOD(mmu_enter_object,	mmu_radix_enter_object),
@@ -2117,16 +2119,32 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	mmu_radix_init_iamr();
 	mmu_radix_proctab_init();
 	mmu_radix_pid_set(kernel_pmap);
-	DELAY(10000);
 	/* XXX assume CPU_FTR_HVMODE */
 	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
-	DELAY(10000);
 
 	mmu_radix_late_bootstrap(start, end);
-	//psl_kernset &= ~(PSL_IR | PSL_DR);
 	__pcpu[0].pc_curpmap = kernel_pmap;
 	pmap_bootstrapped = 1;
 	printf("%s done\n", __func__);
+}
+
+VISIBILITY void
+METHOD(cpu_bootstrap) int ap)
+{
+	uint64_t lpcr;
+	uint64_t ptcr;
+
+	if (powernv_enabled) {
+		lpcr = mfspr(SPR_LPCR);
+		mtspr(SPR_LPCR, lpcr | LPCR_UPRT | LPCR_HR);
+
+		ptcr = parttab_phys | (PARTTAB_SIZE_SHIFT-12);
+		mtspr(SPR_PTCR, ptcr);
+		mmu_radix_init_amor();
+	}
+	mmu_radix_init_iamr();
+	mmu_radix_pid_set(kernel_pmap);
+	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
 }
 
 static SYSCTL_NODE(_vm_pmap, OID_AUTO, l3e, CTLFLAG_RD, 0,
@@ -5178,18 +5196,6 @@ METHOD(remove_pages) pmap_t pmap)
 	 * activating the pmap while this function is executing.
 	 */
 	KASSERT(pmap == PCPU_GET(curpmap), ("non-current pmap %p", pmap));
-#ifdef INVARIANTS
-	{
-		cpuset_t other_cpus;
-
-		other_cpus = all_cpus;
-		critical_enter();
-		CPU_CLR(PCPU_GET(cpuid), &other_cpus);
-		CPU_AND(&other_cpus, &pmap->pm_active);
-		critical_exit();
-		KASSERT(CPU_EMPTY(&other_cpus), ("pmap active %p", pmap));
-	}
-#endif
 
 	lock = NULL;
 
