@@ -1735,6 +1735,7 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 		}
 		phys_avail[j] = regions[i].mr_start;
 		phys_avail[j + 1] = regions[i].mr_start + regions[i].mr_size;
+		
 		phys_avail_count++;
 		physsz += regions[i].mr_size;
 		j += 2;
@@ -1873,6 +1874,11 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	pa = allocpages((msgbufsize + PAGE_MASK) >> PAGE_SHIFT);
 	dpcpu = (void *)PHYS_TO_DMAP(pa);
 	dpcpu_init(dpcpu, curcpu);
+	for (i = 0; phys_avail[i + 2] != 0; i += 2) {
+		dump_avail[i] = phys_avail[i];
+		dump_avail[i+1] = phys_avail[i+1];
+	}
+	dump_avail[i] = 0;
 }
 
 static void
