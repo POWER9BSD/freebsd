@@ -3344,7 +3344,7 @@ METHODVOID(init)
 				 vm_page_array_size));
 		mpte->pindex = pmap_l3e_pindex(VM_MIN_KERNEL_ADDRESS) + i;
 		mpte->phys_addr = KPTphys + (i << PAGE_SHIFT);
-		pmap_insert_pt_page(kernel_pmap, mpte);
+		//pmap_insert_pt_page(kernel_pmap, mpte);
 		mpte->wire_count = 1;
 	}
 	PMAP_UNLOCK(kernel_pmap);
@@ -4172,9 +4172,7 @@ METHOD(pinit0) pmap_t pmap)
 	pmap->pm_root.rt_root = 0;
 	TAILQ_INIT(&pmap->pm_pvchunk);
 	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
-#ifdef notyet
 	kernel_pmap->pm_flags =
-#endif
 		pmap->pm_flags = PMAP_PDE_SUPERPAGE;
 }
 /*
@@ -5525,7 +5523,6 @@ METHOD(mincore) pmap_t pmap, vm_offset_t addr, vm_paddr_t *locked_pa)
 	int val;
 
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, pmap, addr);
-	UNTESTED();
 	PMAP_LOCK(pmap);
 retry:
 	l3ep = pmap_pml3e(pmap, addr);
