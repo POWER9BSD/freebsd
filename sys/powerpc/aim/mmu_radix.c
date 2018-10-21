@@ -3690,9 +3690,7 @@ METHOD(map) vm_offset_t *virt __unused, vm_paddr_t start, vm_paddr_t end, int pr
 {
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %#x, %#x)", __func__, virt, start, end,
-	    prot);
-	for (vm_paddr_t sva = start; sva < end; sva += PAGE_SIZE)
-		pagezero((void*)PHYS_TO_DMAP(sva));
+		 prot);
 	return (PHYS_TO_DMAP(start));
 }
 
