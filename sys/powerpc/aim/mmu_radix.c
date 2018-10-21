@@ -103,6 +103,8 @@ SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
 
 static SYSCTL_NODE(_vm, OID_AUTO, pmap, CTLFLAG_RD, 0, "VM/pmap parameters");
 
+#define FULL_FEATURED
+
 #ifdef FULL_FEATURED
 static int pg_ps_enabled = 1;
 #else
@@ -2258,9 +2260,10 @@ METHOD(copy) pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 
 	if (dst_addr != src_addr)
 		return;
+#ifdef VERBOSE_PMAP
 	printf("%s(dst_pmap=%p, src_pmap=%p, dst_addr=%lx, len=%lu, src_addr=%lx)\n",
 		   __func__, dst_pmap, src_pmap, dst_addr, len, src_addr);
-
+#endif
 	lock = NULL;
 	if (dst_pmap < src_pmap) {
 		PMAP_LOCK(dst_pmap);
@@ -2594,9 +2597,7 @@ METHOD(enter) pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 		/* Assert the required virtual and physical alignment. */
 		KASSERT((va & L3_PAGE_MASK) == 0, ("pmap_enter: va unaligned"));
 		KASSERT(m->psind > 0, ("pmap_enter: m->psind < psind"));
-		printf("enter_l3e\n");
 		rv = pmap_enter_l3e(pmap, va, newpte | RPTE_LEAF, flags, m, &lock);
-		printf("enter_l3e rv=%d\n", rv);
 		goto out;
 	}
 	mpte = NULL;
@@ -4167,10 +4168,14 @@ METHOD(pinit0) pmap_t pmap)
 	pmap->pm_pml1 = kernel_pmap->pm_pml1;
 	pmap->pm_pid = kernel_pmap->pm_pid;
 	PCPU_SET(asid, kernel_pmap->pm_pid);
+
 	pmap->pm_root.rt_root = 0;
 	TAILQ_INIT(&pmap->pm_pvchunk);
 	bzero(&pmap->pm_stats, sizeof pmap->pm_stats);
-	pmap->pm_flags = PMAP_PDE_SUPERPAGE;
+#ifdef notyet
+	kernel_pmap->pm_flags =
+#endif
+		pmap->pm_flags = PMAP_PDE_SUPERPAGE;
 }
 /*
  * pmap_protect_l3e: do the things to protect a 2mpage in a process
