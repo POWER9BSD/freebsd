@@ -203,11 +203,11 @@ typedef struct pv_entry {
 struct pv_chunk_header {
 	PV_CHUNK_HEADER
 };
-
 struct pv_chunk {
 	PV_CHUNK_HEADER
 	struct pv_entry		pc_pventry[_NPCPV];
 };
+CTASSERT(sizeof(struct pv_chunk) == PAGE_SIZE);
 
 struct	md_page {
 	vm_memattr_t	 mdpg_cache_attrs;
@@ -314,7 +314,7 @@ extern	struct pmap kernel_pmap_store;
 #define	PMAP_LOCK_DESTROY(pmap)	mtx_destroy(&(pmap)->pm_mtx)
 #define	PMAP_LOCK_INIT(pmap)	mtx_init(&(pmap)->pm_mtx, \
 				    (pmap == kernel_pmap) ? "kernelpmap" : \
-				    "pmap", NULL, MTX_DEF)
+				    "pmap", NULL, MTX_DEF | MTX_DUPOK)
 #define	PMAP_LOCKED(pmap)	mtx_owned(&(pmap)->pm_mtx)
 #define	PMAP_MTX(pmap)		(&(pmap)->pm_mtx)
 #define	PMAP_TRYLOCK(pmap)	mtx_trylock(&(pmap)->pm_mtx)
