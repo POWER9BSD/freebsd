@@ -392,6 +392,8 @@ trap(struct trapframe *frame)
 		}
 	} else {
 		/* Kernel Mode Traps */
+		if (cold)
+			printtrap(frame->exc, frame, 0, (frame->srr1 & PSL_PR));
 
 		KASSERT(cold || td->td_ucred != NULL,
 		    ("kernel trap doesn't have ucred"));
