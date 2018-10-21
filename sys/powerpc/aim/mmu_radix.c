@@ -2125,7 +2125,7 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	mmu_radix_late_bootstrap(start, end);
 	//psl_kernset &= ~(PSL_IR | PSL_DR);
 	__pcpu[0].pc_curpmap = kernel_pmap;
-
+	pmap_bootstrapped = 1;
 	printf("%s done\n", __func__);
 }
 
