@@ -1714,7 +1714,9 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 
 	if (2 * VM_PHYSSEG_MAX < regions_sz)
 		panic("mmu_radix_early_bootstrap: phys_avail too small");
-
+	for (int i = 0; i < regions_sz; i++)
+		printf("regions[%d].mr_start=%lx regions[%d].mr_size=%lx\n",
+			   i, regions[i].mr_start, i, regions[i].mr_size);
 	/*
 	 * XXX workaround a simulator bug
 	 */
