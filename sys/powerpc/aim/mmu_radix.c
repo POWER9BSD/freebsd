@@ -1569,8 +1569,12 @@ mmu_radix_dmap_range(vm_paddr_t start, vm_paddr_t end)
 	printf("dmap %lx -> %lx\n", start, end);
 	while (start < end) {
 		pteval = start | DMAP_PAGE_BITS;
-
-		pte = pmap_pml2e(kernel_pmap, PHYS_TO_DMAP(start));
+		pte = pmap_pml1e(kernel_pmap, PHYS_TO_DMAP(start));
+		if ((*pte & RPTE_VALID) == 0) {
+			page = alloc_pt_page();
+			pde_store(pte, page);
+		}
+		pte = pmap_l1e_to_l2e(pte, PHYS_TO_DMAP(start));
 		if ((start & L2_PAGE_MASK) == 0 &&
 			end - start >= L2_PAGE_SIZE) {
 			start += L2_PAGE_SIZE;
@@ -1599,17 +1603,8 @@ mmu_radix_dmap_range(vm_paddr_t start, vm_paddr_t end)
 static void
 mmu_radix_dmap_populate(vm_size_t hwphyssz)
 {
-	u_long l2pages;
-	vm_paddr_t pages, start, end;
+	vm_paddr_t start, end;
 
-	l2pages = ((physmem << PAGE_SHIFT) + L1_PAGE_MASK) >> L1_PAGE_SIZE_SHIFT;
-	pages = allocpages(l2pages);
-	printf("l2pages=%lu l2phys=%lx hwphyssz=%lx\n", l2pages, pages, hwphyssz);
-	for (int i = 0; i < l2pages; i++, pages += PAGE_SIZE) {
-		pagezero((void*)PHYS_TO_DMAP(pages));
-		printf("pml1[%d]= %lx\n", i, pages);
-		kernel_pmap->pm_pml1[i] = (pages | RPTE_VALID | RPTE_SHIFT);
-	}
 	for (int i = 0; i < pregions_sz; i++) {
 		start = pregions[i].mr_start;
 		end = start + pregions[i].mr_size;
