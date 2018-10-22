@@ -86,7 +86,6 @@ restore_usersrs:
  * Kernel SRs are loaded directly from the PCPU fields
  */
 restore_kernsrs:
-	blr
 	GET_CPUINFO(%r28)
 	addi	%r28,%r28,PC_KERNSLB
 	ld	%r29,16(%r28)		/* One past USER_SLB_SLOT */
