@@ -246,8 +246,6 @@ platform_smp_ap_init()
 struct cpu_group *
 cpu_topo(void)
 {
-	kobj_class_t cls = plat_obj->ops->cls;
-
 	return (PLATFORM_SMP_TOPO(plat_obj));
 }
 #endif
