@@ -290,7 +290,7 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 {
 	Elf_Addr *where;
 	Elf_Addr addr;
-	Elf_Addr addend;
+	Elf_Addr addend, val;
 	Elf_Word rtype, symidx;
 	const Elf_Rela *rela;
 	int error;
@@ -336,7 +336,12 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 #endif
 		__asm __volatile("dcbst 0,%0; sync" :: "r"(where) : "memory");
 		break;
-
+	 case R_AARCH64_IRELATIVE:
+		 addr = relocbase + addend;
+		 val = ((Elf64_Addr (*)(void))addr)();
+		 if (*where != val)
+			 *where = val;
+		 break;
 	default:
 		printf("kldload: unexpected relocation type %d\n",
 		    (int) rtype);
