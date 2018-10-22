@@ -164,5 +164,18 @@ SECTIONS
   .debug_typenames 0 : { *(.debug_typenames) }
   .debug_varnames  0 : { *(.debug_varnames) }
   /* These must appear regardless of  .  */
+  /* GNU DWARF 2 extensions */
+  .debug_gnu_pubnames 0 : { *(.debug_gnu_pubnames) }
+   .debug_gnu_pubtypes 0 : { *(.debug_gnu_pubtypes) }
+  /* DWARF 3 */
+  .debug_pubtypes 0 : { *(.debug_pubtypes) }
+  .debug_ranges   0 : { *(.debug_ranges) }
+  .gnu.attributes 0 : { KEEP (*(.gnu.attributes)) }
+  /* DWARF 4 */
+  .debug_types	0 : { *(.debug_types) }
+  /* DWARF 5 */
+  .debug_macro	0 : { *(.debug_macro) }
+  .debug_addr	0 : { *(.debug_addr) }
+  /DISCARD/ : { *(.note.GNU-stack) }
 }
 
