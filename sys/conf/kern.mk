@@ -189,6 +189,8 @@ CFLAGS.gcc+=	-mno-spe
 .if ${MACHINE_ARCH} == "powerpc64"
 .if ${COMPILER_VERSION} >= 40900
 CFLAGS.gcc+=	-mabi=elfv2
+CFLAGS.gcc+=	-mcpu=power6
+CFLAGS.gcc+=	-mtune=power9
 .else
 CFLAGS.gcc+=	-mcall-aixdesc
 .endif
@@ -240,8 +242,12 @@ CFLAGS+=	-mretpoline
 # understand. Do this unconditionally as it is harmless when not needed,
 # but critical for these newer versions.
 #
-.if ${CFLAGS:M-g} != "" && ${CFLAGS:M-gdwarf*} == ""
+.if ${CFLAGS:M-g} != "" && ${CFLAGS:M-gdwarf*} == ""  
+.if ${MACHINE_CPUARCH} == "powerpc" 
+CFLAGS+=	-gdwarf-5
+.else
 CFLAGS+=	-gdwarf-2
+.endif
 .endif
 
 CFLAGS+= ${CWARNFLAGS:M*} ${CWARNFLAGS.${.IMPSRC:T}}
