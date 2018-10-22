@@ -106,6 +106,7 @@
 #define	PAGE_SIZE	(1L << PAGE_SHIFT)	/* Page size */
 #define	PAGE_MASK	(PAGE_SIZE - 1)
 #define	NPTEPG		(PAGE_SIZE/(sizeof (pt_entry_t)))
+#define	NPDEPG		(PAGE_SIZE/(sizeof (pt_entry_t)))
 
 #define L1_PAGE_SIZE_SHIFT 39
 #define L1_PAGE_SIZE (1UL<<L1_PAGE_SIZE_SHIFT)

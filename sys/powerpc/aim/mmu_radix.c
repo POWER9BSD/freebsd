@@ -85,6 +85,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/sr.h>
 #include <machine/trap.h>
 #include <machine/mmuvar.h>
+#include <machine/pmap_private.h>
 
 #ifdef INVARIANTS
 #include <vm/uma_dbg.h>
@@ -96,10 +97,11 @@ static void pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va);
 #endif
 
 
-static int nkpt = 64;
+int nkpt = 64;
 SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
     "Number of kernel page table pages allocated on bootup");
 
+caddr_t crashdumpmap;
 
 static SYSCTL_NODE(_vm, OID_AUTO, pmap, CTLFLAG_RD, 0, "VM/pmap parameters");
 
@@ -584,26 +586,6 @@ pa_cmp(const void *a, const void *b)
 		return (0);
 }
 
-#define L1_PAGE_SIZE_SHIFT 39
-#define L1_PAGE_SIZE (1UL<<L1_PAGE_SIZE_SHIFT)
-#define L1_PAGE_MASK (L1_PAGE_SIZE-1)
-
-#define L2_PAGE_SIZE_SHIFT 30
-#define L2_PAGE_SIZE (1UL<<L2_PAGE_SIZE_SHIFT)
-#define L2_PAGE_MASK (L2_PAGE_SIZE-1)
-
-#define L3_PAGE_SIZE_SHIFT 21
-#define L3_PAGE_SIZE (1UL<<L3_PAGE_SIZE_SHIFT)
-#define L3_PAGE_MASK (L3_PAGE_SIZE-1)
-
-#define RPTE_SHIFT 9
-#define NLS_MASK ((1UL<<5)-1)
-#define RPTE_ENTRIES (1UL<<RPTE_SHIFT)
-#define RPTE_MASK (RPTE_ENTRIES-1)
-
-#define NLB_SHIFT 0
-#define NLB_MASK (((1UL<<52)-1) << 8)
-
 #define	pte_load_store(ptep, pte)	atomic_swap_long(ptep, pte)
 #define	pte_load_clear(ptep)		atomic_swap_long(ptep, 0)	
 #define	pte_store(ptep, pte) do {	   \
@@ -627,16 +609,6 @@ pa_cmp(const void *a, const void *b)
 #define	SYNC()		__asm __volatile("sync");
 #define	EIEIO()		__asm __volatile("eieio");
 
-#define PG_W	RPTE_WIRED
-#define PG_V	RPTE_VALID
-#define PG_MANAGED	RPTE_MANAGED
-#define PG_PROMOTED	RPTE_PROMOTED
-#define PG_M	RPTE_C
-#define PG_A	RPTE_R
-#define PG_X	RPTE_EAA_X
-#define PG_RW	RPTE_EAA_W
-#define PG_PTE_CACHE RPTE_ATTR_MASK
-
 
 #define	PMAP_PDE_SUPERPAGE	(1 << 8)	/* supports 2MB superpages */
 
@@ -647,43 +619,6 @@ pa_cmp(const void *a, const void *b)
 #define	PG_PTE_PROMOTE	(PG_X | PG_MANAGED | PG_W | PG_PTE_CACHE | \
 	    PG_M | PG_A | RPTE_EAA_MASK | PG_V)
 
-
-static __inline void
-ttusync(void)
-{
-	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
-}
-
-static __inline void
-TLBIE(uint64_t vpn) {
-	__asm __volatile("tlbie %0" :: "r"(vpn) : "memory");
-	ttusync();
-}
-
-
-static __inline int
-cntlzd(uint64_t word)
-{
-	uint64_t result;
-	__asm __volatile("cntlzd %0,%1" : "=r"(result) : "r"(word));
-
-	return (int)result;
-}
-
-static __inline int
-cnttzd(uint64_t word)
-{
-	uint64_t result;
-	__asm __volatile("cnttzd %0,%1" : "=r"(result) : "r"(word));
-
-	return (int)result;
-}
-
-static inline int
-bsfq(uint64_t word)
-{
-	return (cnttzd(word));
-}
 
 static void
 pmap_epoch_init(void *arg __unused)
@@ -720,125 +655,6 @@ static void
 pmap_delayed_invl_wait(vm_page_t m __unused)
 {
 	epoch_wait_preempt(pmap_epoch);
-}
-
-/* Return various clipped indexes for a given VA */
-static __inline vm_pindex_t
-pmap_pte_index(vm_offset_t va)
-{
-
-	return ((va >> PAGE_SHIFT) & RPTE_MASK);
-}
-
-static int pmap_debug = 0;
-
-static __inline vm_pindex_t
-pmap_l3e_pindex(vm_offset_t va)
-{
-	if (pmap_debug)
-		printf("l4idx: %lu\n", ((va & PG_FRAME) >> L3_PAGE_SIZE_SHIFT));
-	return ((va & PG_FRAME) >> L3_PAGE_SIZE_SHIFT);
-}
-
-static __inline vm_pindex_t
-pmap_pml3e_index(vm_offset_t va)
-{
-	if (pmap_debug)
-		printf("l3idx: %lu\n", ((va >> L3_PAGE_SIZE_SHIFT) & RPTE_MASK));
-	return ((va >> L3_PAGE_SIZE_SHIFT) & RPTE_MASK);
-}
-
-static __inline vm_pindex_t
-pmap_pml2e_index(vm_offset_t va)
-{
-	if (pmap_debug)
-		printf("l2idx: %lu\n", ((va >> L2_PAGE_SIZE_SHIFT) & RPTE_MASK));
-	return ((va >> L2_PAGE_SIZE_SHIFT) & RPTE_MASK);
-}
-
-static __inline vm_pindex_t
-pmap_pml1e_index(vm_offset_t va)
-{
-	if (pmap_debug)
-		printf("l1idx(%lx): %lu\n", va, ((va & PG_FRAME) >> L1_PAGE_SIZE_SHIFT));
-	return ((va & PG_FRAME) >> L1_PAGE_SIZE_SHIFT);
-}
-
-/* Return a pointer to the PT slot that corresponds to a VA */
-static __inline pt_entry_t *
-pmap_l3e_to_pte(pt_entry_t *l3e, vm_offset_t va)
-{
-	pt_entry_t *pte;
-	vm_paddr_t ptepa;
-
-	ptepa = (*l3e & NLB_MASK);
-	pte = (pt_entry_t *)PHYS_TO_DMAP(ptepa);
-	return (&pte[pmap_pte_index(va)]);
-}
-
-/* Return a pointer to the PD slot that corresponds to a VA */
-static __inline pt_entry_t *
-pmap_l2e_to_l3e(pt_entry_t *l2e, vm_offset_t va)
-{
-	pt_entry_t *l3e;
-	vm_paddr_t l3pa;
-
-	l3pa = (*l2e & NLB_MASK);
-	l3e = (pml3_entry_t *)PHYS_TO_DMAP(l3pa);
-	return (&l3e[pmap_pml3e_index(va)]);
-}
-
-/* Return a pointer to the PD slot that corresponds to a VA */
-static __inline pt_entry_t *
-pmap_l1e_to_l2e(pt_entry_t *l1e, vm_offset_t va)
-{
-	pt_entry_t *l2e;
-	vm_paddr_t l2pa;
-
-	l2pa = (*l1e & NLB_MASK);
-	
-	l2e = (pml2_entry_t *)PHYS_TO_DMAP(l2pa);
-	return (&l2e[pmap_pml2e_index(va)]);
-}
-
-static __inline pml1_entry_t *
-pmap_pml1e(pmap_t pmap, vm_offset_t va)
-{
-
-	return (&pmap->pm_pml1[pmap_pml1e_index(va)]);
-}
-
-static pt_entry_t *
-pmap_pml2e(pmap_t pmap, vm_offset_t va)
-{
-	pt_entry_t *l1e;
-
-	l1e = pmap_pml1e(pmap, va);
-	if (l1e == NULL || (*l1e & RPTE_VALID) == 0)
-		return (NULL);
-	return (pmap_l1e_to_l2e(l1e, va));
-}
-
-static pt_entry_t *
-pmap_pml3e(pmap_t pmap, vm_offset_t va)
-{
-	pt_entry_t *l2e;
-
-	l2e = pmap_pml2e(pmap, va);
-	if (l2e == NULL || (*l2e & RPTE_VALID) == 0)
-		return (NULL);
-	return (pmap_l2e_to_l3e(l2e, va));
-}
-
-static pt_entry_t *
-pmap_pte(pmap_t pmap, vm_offset_t va)
-{
-	pt_entry_t *l3e;
-
-	l3e = pmap_pml3e(pmap, va);
-	if (l3e == NULL || (*l3e & RPTE_VALID) == 0)
-		return (NULL);
-	return (pmap_l3e_to_pte(l3e, va));
 }
 
 static __inline void
@@ -918,7 +734,7 @@ pmap_cache_bits(vm_memattr_t ma)
 static void
 pmap_invalidate_page(pmap_t pmap, vm_offset_t start)
 {
-	TLBIE(start);
+	tlbie(start);
 }
 
 static void
@@ -926,7 +742,7 @@ pmap_invalidate_range(pmap_t pmap, vm_offset_t start, vm_offset_t end)
 {
 
 	while (start != end) {
-		TLBIE(start);
+		tlbie(start);
 		start += PAGE_SIZE;
 	}
 }
@@ -1910,6 +1726,12 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 		dump_avail[i+1] = phys_avail[i+1];
 	}
 	dump_avail[i] = 0;
+	crashdumpmap = (caddr_t)virtual_avail;
+	virtual_avail += MAXDUMPPGS*PAGE_SIZE;
+	/*
+	 * Reserve some special page table entries/VA space for temporary
+	 * mapping of pages.
+	 */
 }
 
 static void
