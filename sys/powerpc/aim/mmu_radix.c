@@ -2582,8 +2582,18 @@ retry:
 			if ((origpte & PG_MANAGED) != 0 &&
 			    (newpte & PG_RW) != 0)
 				vm_page_aflag_set(m, PGA_WRITEABLE);
-			if (((origpte ^ newpte) & ~(PG_M | PG_A)) == 0)
+			if (((origpte ^ newpte) & ~(PG_M | PG_A)) == 0) {
+				if ((newpte & (PG_A|PG_M)) != (origpte & (PG_A|PG_M))) {
+					if (!atomic_cmpset_long(pte, origpte, newpte))
+						goto retry;
+					if ((newpte & PG_M) != (origpte & PG_M))
+						vm_page_dirty(m);
+					if ((newpte & PG_A) != (origpte & PG_A))
+						vm_page_aflag_set(m, PGA_REFERENCED);
+					ttusync();
+				}
 				goto unchanged;
+			}
 			goto validate;
 		}
 
