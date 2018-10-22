@@ -1064,12 +1064,14 @@ pmap_pvh_remove(struct md_page *pvh, pmap_t pmap, vm_offset_t va)
 	pv_entry_t pv;
 
 	TAILQ_FOREACH(pv, &pvh->pv_list, pv_next) {
+#ifdef INVARIANTS
 		if (PV_PMAP(pv) == NULL) {
 			printf("corrupted pv_chunk/pv %p\n", pv);
 			printf("pv_chunk: %64D\n", pv_to_chunk(pv), ":");
 		}
 		MPASS(PV_PMAP(pv) != NULL);
 		MPASS(pv->pv_va != 0);
+#endif
 		if (pmap == PV_PMAP(pv) && va == pv->pv_va) {
 			TAILQ_REMOVE(&pvh->pv_list, pv, pv_next);
 			pvh->pv_gen++;
@@ -1589,7 +1591,8 @@ mmu_radix_dmap_range(vm_paddr_t start, vm_paddr_t end)
 	pt_entry_t *pte, pteval;
 	vm_paddr_t page;
 
-	printf("dmap %lx -> %lx\n", start, end);
+	if (bootverbose)
+		printf("%s %lx -> %lx\n", __func__, start, end);
 	while (start < end) {
 		pteval = start | DMAP_PAGE_BITS;
 		pte = pmap_pml1e(kernel_pmap, PHYS_TO_DMAP(start));
@@ -1739,8 +1742,9 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	hwphyssz = 0;
 	TUNABLE_ULONG_FETCH("hw.physmem", (u_long *) &hwphyssz);
 	for (i = 0, j = 0; i < regions_sz; i++) {
-		printf("regions[%d].mr_start=%016lx regions[%d].mr_size=%016lx\n",
-			   i, regions[i].mr_start, i, regions[i].mr_size);
+		if (bootverbose)
+			printf("regions[%d].mr_start=%016lx regions[%d].mr_size=%016lx\n",
+				   i, regions[i].mr_start, i, regions[i].mr_size);
 
 		if (regions[i].mr_size < PAGE_SIZE)
 			continue;
@@ -1852,8 +1856,8 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	 * Set up the Open Firmware pmap and add its mappings if not in real
 	 * mode.
 	 */
-
-	printf("%s enter\n", __func__);
+	if (bootverbose)
+		printf("%s enter\n", __func__);
 
 	/*
 	 * Calculate the last available physical address.
@@ -1888,7 +1892,6 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 		va += PAGE_SIZE;
 	}
 	thread0.td_kstack_pages = kstack_pages;
-	printf("%s set kstack\n", __func__);
 
 	/*
 	 * Allocate virtual address space for the message buffer.
@@ -1916,9 +1919,11 @@ mmu_parttab_init(void)
 
 	isa3_parttab = (struct pate *)PHYS_TO_DMAP(parttab_phys);
 
-	printf("%s parttab: %p\n", __func__, isa3_parttab);
+	if (bootverbose)
+		printf("%s parttab: %p\n", __func__, isa3_parttab);
 	ptcr = parttab_phys | (PARTTAB_SIZE_SHIFT-12);
-	printf("setting ptcr %lx\n", ptcr);
+	if (bootverbose)
+		printf("setting ptcr %lx\n", ptcr);
 	mtspr(SPR_PTCR, ptcr);
 #if 0
 	/* functional simulator claims MCE on this */
@@ -1931,9 +1936,10 @@ static void
 mmu_parttab_update(uint64_t lpid, uint64_t pagetab, uint64_t proctab)
 {
 	uint64_t prev;
-	
-	printf("%s isa3_parttab %p lpid %lx pagetab %lx proctab %lx\n", __func__, isa3_parttab,
-		   lpid, pagetab, proctab);
+
+	if (bootverbose)
+		printf("%s isa3_parttab %p lpid %lx pagetab %lx proctab %lx\n", __func__, isa3_parttab,
+			   lpid, pagetab, proctab);
 	prev = be64toh(isa3_parttab[lpid].pagetab);
 	isa3_parttab[lpid].pagetab = htobe64(pagetab);
 	isa3_parttab[lpid].proctab = htobe64(proctab);
@@ -1956,12 +1962,9 @@ mmu_radix_parttab_init(void)
 	uint64_t pagetab;
 
 	mmu_parttab_init();
-	printf("%s construct pagetab\n", __func__);
 	pagetab = RTS_SIZE | DMAP_TO_PHYS((vm_offset_t)kernel_pmap->pm_pml1) | \
 		         RADIX_PGD_INDEX_SHIFT | PARTTAB_HR;
-	printf("%s install pagetab %lx\n", __func__, pagetab);
 	mmu_parttab_update(0, pagetab, 0);
-	printf("parttab inited\n");
 }
 
 static void
@@ -1990,8 +1993,9 @@ mmu_radix_proctab_init(void)
 	__asm __volatile(PPC_TLBIE_5(%0,%1,2,1,1) : :
 		     "r" (TLBIEL_INVAL_SET_LPID), "r" (0));
 	__asm __volatile("eieio; tlbsync; ptesync" : : : "memory");
-	printf("process table %p and kernel radix PDE: %p\n",
-		   isa3_proctab, kernel_pmap->pm_pml1);
+	if (bootverbose)
+		printf("process table %p and kernel radix PDE: %p\n",
+			   isa3_proctab, kernel_pmap->pm_pml1);
 	mtmsr(mfmsr() | PSL_DR );
 	mtmsr(mfmsr() &  ~PSL_DR);
 	kernel_pmap->pm_pid = isa3_base_pid;
@@ -2119,16 +2123,19 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 {
 	uint64_t lpcr;
 
-	printf("%s\n", __func__);
+	if (bootverbose)
+		printf("%s\n", __func__);
 	hw_direct_map = 1;
 	mmu_radix_early_bootstrap(start, end);
+	if (bootverbose)
 	printf("early bootstrap complete\n");
 	if (powernv_enabled) {
 		lpcr = mfspr(SPR_LPCR);
 		mtspr(SPR_LPCR, lpcr | LPCR_UPRT | LPCR_HR);
 		mmu_radix_parttab_init();
 		mmu_radix_init_amor();
-		printf("powernv init complete\n");
+		if (bootverbose)
+			printf("powernv init complete\n");
 	} else {
 		/* XXX assume we're virtualized - QEMU doesn't support radix on powernv */
 		/* radix_init_pseries() */
@@ -2142,7 +2149,8 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	mmu_radix_late_bootstrap(start, end);
 	__pcpu[0].pc_curpmap = kernel_pmap;
 	pmap_bootstrapped = 1;
-	printf("%s done\n", __func__);
+	if (bootverbose)
+		printf("%s done\n", __func__);
 }
 
 VISIBILITY void
@@ -2677,8 +2685,6 @@ retry:
 		    nosleep ? NULL : &lock);
 		if (mpte == NULL && nosleep) {
 			rv = KERN_RESOURCE_SHORTAGE;
-			printf("KERN_RESOURCE_SHORTAGE\n");
-
 			goto out;
 		}
 		if (retrycount++ == 6)
@@ -3746,10 +3752,6 @@ METHOD(map) vm_offset_t *virt __unused, vm_paddr_t start, vm_paddr_t end, int pr
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %#x, %#x)", __func__, virt, start, end,
 		 prot);
-#ifdef DDB
-	printf("pmap_map(%lx, %lx)\n", start, end);
-	pmap_pte_walk(kernel_pmap->pm_pml1, PHYS_TO_DMAP(start));
-#endif	
 	return (PHYS_TO_DMAP(start));
 }
 
@@ -4029,7 +4031,6 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 			vm_wait(NULL);
 			PMAP_LOCK(pmap);
 		}
-		printf("page_alloc fail\n");
 		/*
 		 * Indicate the need to retry.  While waiting, the page table
 		 * page may have been allocated.
@@ -4068,7 +4069,6 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 			/* Have to allocate a new pdp, recurse */
 			if (_pmap_allocpte(pmap, NUPDE + NUPDPE + pml1index,
 				lockp) == NULL) {
-				printf("next level _pmap_allocpte l2 fail -- #1\n");
 				vm_page_unwire_noq(m);
 				vm_page_free_zero(m);
 				return (NULL);
@@ -4101,7 +4101,6 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 			/* Have to allocate a new pd, recurse */
 			if (_pmap_allocpte(pmap, NUPDE + pdpindex,
 			    lockp) == NULL) {
-				printf("next level _pmap_allocpte l2 fail\n");
 				vm_page_unwire_noq(m);
 				vm_page_free_zero(m);
 				return (NULL);
@@ -4115,7 +4114,6 @@ _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp)
 				/* Have to allocate a new pd, recurse */
 				if (_pmap_allocpte(pmap, NUPDE + pdpindex,
 				    lockp) == NULL) {
-					printf("next level _pmap_allocpte l3 fail\n");
 					vm_page_unwire_noq(m);
 					vm_page_free_zero(m);
 					return (NULL);
@@ -4355,7 +4353,6 @@ METHOD(protect) pmap_t pmap, vm_offset_t sva, vm_offset_t eva, vm_prot_t prot)
 			 * Are we protecting the entire large page?  If not,
 			 * demote the mapping and fall through.
 			 */
-			printf("protect or demote: %lx\n", *l3e);
 			if (sva + L3_PAGE_SIZE == va_next && eva >= va_next) {
 				if (pmap_protect_l3e(pmap, l3e, sva, prot))
 					anychanged = TRUE;
@@ -5784,7 +5781,8 @@ static pt_entry_t
 mmu_radix_calc_wimg(vm_paddr_t pa, vm_memattr_t ma)
 {
 
-	printf("pa=%lx ma=%x\n", pa, ma);
+	if (bootverbose)
+		printf("%s pa=%lx ma=%x\n", __func__, pa, ma);
 	if (ma != VM_MEMATTR_DEFAULT) {
 		switch (ma) {
 		case VM_MEMATTR_UNCACHEABLE:
