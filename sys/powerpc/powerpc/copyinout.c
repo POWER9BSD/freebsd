@@ -70,7 +70,9 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/pcb.h>
 #include <machine/vmparam.h>
+#include <machine/ifunc.h>
 
+#ifdef notyet
 int
 copyout(const void *kaddr, void *udaddr, size_t len)
 {
@@ -181,9 +183,11 @@ copyinstr(const void *udaddr, void *kaddr, size_t len, size_t *done)
 
 	return (rv);
 }
-
+#endif
+int subyte_hash(volatile void *addr, int byte);
+int subyte_radix(volatile void *addr, int byte);
 int
-subyte(volatile void *addr, int byte)
+subyte_hash(volatile void *addr, int byte)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -209,7 +213,14 @@ subyte(volatile void *addr, int byte)
 	td->td_pcb->pcb_onfault = NULL;
 	return (0);
 }
+DEFINE_IFUNC(, int, subyte, (volatile void *, int), static)
+{
 
+	return (disable_radix ?
+	    subyte_hash : subyte_radix);
+}
+
+#ifdef notyet
 #ifdef __powerpc64__
 int
 suword32(volatile void *addr, int word)
@@ -520,4 +531,5 @@ casueword(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
 	*oldvalp = val;
 	return (0);
 }
+#endif
 #endif
