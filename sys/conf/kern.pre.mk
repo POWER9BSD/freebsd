@@ -122,7 +122,7 @@ LDFLAGS+=	-Wl,--build-id=sha1
 .endif
 
 .if (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
-    ${MACHINE_CPUARCH} == "i386") && \
+    ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "powerpc64") && \
     defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mifunc} == ""
 .error amd64/arm64/i386 kernel requires linker ifunc support
 .endif
