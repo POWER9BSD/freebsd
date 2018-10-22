@@ -1653,7 +1653,8 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 
 	ptpages = allocpages(2);
 	l1phys = moea64_bootstrap_alloc(RADIX_PGD_SIZE, RADIX_PGD_SIZE);
-	printf("l1phys=%lx\n", l1phys);
+	if (bootverbose)
+		printf("l1phys=%lx\n", l1phys);
 	MPASS((l1phys & (RADIX_PGD_SIZE-1)) == 0);
 	for (int i = 0; i < RADIX_PGD_SIZE/PAGE_SIZE; i++)
 		pagezero((void*)PHYS_TO_DMAP(parttab_phys + i*PAGE_SIZE));
@@ -1676,16 +1677,19 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 	 * the kernel page table pages need to be preserved in
 	 * phys_avail and not overlap with previous  allocations
 	 */
-	for (int j = 0; j < 2*phys_avail_count; j+=2)
-		printf("phys_avail[%d]=%08lx - phys_avail[%d]=%08lx\n",
-			   j, phys_avail[j], j+1, phys_avail[j+1]);
-
 	pages = allocpages(nkpt);
+	if (bootverbose) {
+		printf("phys_avail after dmap populate and nkpt allocation\n");
+		for (int j = 0; j < 2*phys_avail_count; j+=2)
+			printf("phys_avail[%d]=%08lx - phys_avail[%d]=%08lx\n",
+				   j, phys_avail[j], j+1, phys_avail[j+1]);
+	}
 	KPTphys = pages;
 	for (int i = 0; i < nkpt; i++, pte++, pages += PAGE_SIZE)
 		*pte = (pages | RPTE_VALID | RPTE_SHIFT);
 	kernel_vm_end = VM_MIN_KERNEL_ADDRESS + nkpt*L3_PAGE_SIZE;
-	printf("kernel_pmap pml1 %p\n", kernel_pmap->pm_pml1);
+	if (bootverbose)
+		printf("kernel_pmap pml1 %p\n", kernel_pmap->pm_pml1);
 	/*
 	 * Add a physical memory segment (vm_phys_seg) corresponding to the
 	 * preallocated kernel page table pages so that vm_page structures
@@ -1714,9 +1718,10 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 
 	if (2 * VM_PHYSSEG_MAX < regions_sz)
 		panic("mmu_radix_early_bootstrap: phys_avail too small");
-	for (int i = 0; i < regions_sz; i++)
-		printf("regions[%d].mr_start=%lx regions[%d].mr_size=%lx\n",
-			   i, regions[i].mr_start, i, regions[i].mr_size);
+	if (bootverbose)
+		for (int i = 0; i < regions_sz; i++)
+			printf("regions[%d].mr_start=%lx regions[%d].mr_size=%lx\n",
+				   i, regions[i].mr_start, i, regions[i].mr_size);
 	/*
 	 * XXX workaround a simulator bug
 	 */
@@ -1726,9 +1731,10 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 			regions[i].mr_start &= ~PAGE_MASK;
 			regions[i].mr_size &= ~PAGE_MASK;
 		}
-	for (int i = 0; i < pregions_sz; i++)
-		printf("pregions[%d].mr_start=%lx pregions[%d].mr_size=%lx\n",
-			   i, pregions[i].mr_start, i, pregions[i].mr_size);
+	if (bootverbose)
+		for (int i = 0; i < pregions_sz; i++)
+			printf("pregions[%d].mr_start=%lx pregions[%d].mr_size=%lx\n",
+				   i, pregions[i].mr_start, i, pregions[i].mr_size);
 
 	phys_avail_count = 0;
 	physsz = 0;
@@ -1802,10 +1808,12 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 			    PAGE_SIZE;
 		}
 	}
-	for (j = 0; j < 2*phys_avail_count; j+=2)
-		printf("phys_avail[%d]=%08lx - phys_avail[%d]=%08lx\n",
-			   j, phys_avail[j], j+1, phys_avail[j+1]);
-
+	if (bootverbose) {
+		printf("phys_avail ranges after filtering:\n");
+		for (j = 0; j < 2*phys_avail_count; j+=2)
+			printf("phys_avail[%d]=%08lx - phys_avail[%d]=%08lx\n",
+				   j, phys_avail[j], j+1, phys_avail[j+1]);
+	}
 	/* Remove physical available regions marked for removal (~0) */
 	if (rm_pavail) {
 		qsort(phys_avail, 2*phys_avail_count, sizeof(phys_avail[0]),
