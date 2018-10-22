@@ -187,7 +187,6 @@ static void mmu_radix_page_set_memattr(mmu_t, vm_page_t m, vm_memattr_t ma);
 static void mmu_radix_kenter_attr(mmu_t, vm_offset_t, vm_paddr_t, vm_memattr_t ma);
 static void mmu_radix_kenter(mmu_t, vm_offset_t, vm_paddr_t);
 static boolean_t mmu_radix_dev_direct_mapped(mmu_t, vm_paddr_t, vm_size_t);
-static void mmu_radix_sync_icache(mmu_t, pmap_t, vm_offset_t, vm_size_t);
 static void mmu_radix_dumpsys_map(mmu_t mmu, vm_paddr_t pa, size_t sz,
     void **va);
 static void mmu_radix_scan_init(mmu_t mmu);
@@ -238,7 +237,6 @@ static mmu_method_t mmu_radix_methods[] = {
 	MMUMETHOD(mmu_remove_pages,	mmu_radix_remove_pages),
 	MMUMETHOD(mmu_remove_all,      	mmu_radix_remove_all),
 	MMUMETHOD(mmu_remove_write,	mmu_radix_remove_write),
-	MMUMETHOD(mmu_sync_icache,	mmu_radix_sync_icache),
 	MMUMETHOD(mmu_ts_referenced,	mmu_radix_ts_referenced),
 	MMUMETHOD(mmu_unwire,		mmu_radix_unwire),
 	MMUMETHOD(mmu_zero_page,       	mmu_radix_zero_page),
@@ -5893,14 +5891,6 @@ METHOD(dev_direct_mapped) vm_paddr_t pa, vm_size_t size)
 
 	CTR3(KTR_PMAP, "%s(%#x, %#x)", __func__, pa, size);
 	return (mem_valid(pa, size));
-}
-
-VISIBILITY void
-METHOD(sync_icache) pmap_t pm, vm_offset_t va, vm_size_t sz)
-{
- 
-	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, pm, va, sz);
-	UNIMPLEMENTED();
 }
 
 #ifdef MMU_DIRECT
