@@ -2590,7 +2590,6 @@ retry:
 						vm_page_dirty(m);
 					if ((newpte & PG_A) != (origpte & PG_A))
 						vm_page_aflag_set(m, PGA_REFERENCED);
-					ttusync();
 				}
 				goto unchanged;
 			}
