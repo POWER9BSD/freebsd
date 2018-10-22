@@ -412,10 +412,9 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	 * Bring up MMU
 	 */
 	pmap_bootstrap(startkernel, endkernel);
-	printf("enabling translation\n");
-	DELAY(10000);
+	if (bootverbose)
+		printf("enabling translation\n");
 	mtmsr(psl_kernset & ~PSL_EE);
-	printf("translation enabled\n");
 	/*
 	 * Initialize params/tunables that are derived from memsize
 	 */
@@ -429,21 +428,18 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 		strlcpy(kernelname, env, sizeof(kernelname));
 		freeenv(env);
 	}
-	printf("got env\n");
 	/*
 	 * Finish setting up thread0.
 	 */
 	thread0.td_pcb = (struct pcb *)
 	    ((thread0.td_kstack + thread0.td_kstack_pages * PAGE_SIZE -
 		  sizeof(struct pcb)) & ~15UL);
-	printf("bzero %p\n", thread0.td_pcb);
 	bzero((void *)thread0.td_pcb, sizeof(struct pcb));
-	printf("set curpcb %p kstack: %lx\n", thread0.td_pcb, thread0.td_kstack);
 	pc->pc_curpcb = thread0.td_pcb;
-	printf("setup thread\n");
 	/* Initialise the message buffer. */
 	msgbufinit(msgbufp, msgbufsize);
-	printf("inited\n");
+	if (bootverbose)
+		printf("%s done\n", __func__);
 
 #ifdef KDB
 	if (boothowto & RB_KDB)
