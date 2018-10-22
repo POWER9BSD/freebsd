@@ -184,6 +184,7 @@ copyinstr(const void *udaddr, void *kaddr, size_t len, size_t *done)
 	return (rv);
 }
 #endif
+#ifdef USE_IFUNCS
 int subyte_hash(volatile void *addr, int byte);
 int subyte_radix(volatile void *addr, int byte);
 int
@@ -219,7 +220,7 @@ DEFINE_IFUNC(, int, subyte, (volatile void *, int), static)
 	return (disable_radix ?
 	    subyte_hash : subyte_radix);
 }
-
+#endif
 #ifdef notyet
 #ifdef __powerpc64__
 int
