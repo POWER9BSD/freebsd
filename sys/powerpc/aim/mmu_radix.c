@@ -1808,12 +1808,6 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 			    PAGE_SIZE;
 		}
 	}
-	if (bootverbose) {
-		printf("phys_avail ranges after filtering:\n");
-		for (j = 0; j < 2*phys_avail_count; j+=2)
-			printf("phys_avail[%d]=%08lx - phys_avail[%d]=%08lx\n",
-				   j, phys_avail[j], j+1, phys_avail[j+1]);
-	}
 	/* Remove physical available regions marked for removal (~0) */
 	if (rm_pavail) {
 		qsort(phys_avail, 2*phys_avail_count, sizeof(phys_avail[0]),
@@ -1822,6 +1816,12 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 		for (i = 2*phys_avail_count;
 		     i < 2*(phys_avail_count + rm_pavail); i+=2)
 			phys_avail[i] = phys_avail[i+1] = 0;
+	}
+	if (bootverbose) {
+		printf("phys_avail ranges after filtering:\n");
+		for (j = 0; j < 2*phys_avail_count; j+=2)
+			printf("phys_avail[%d]=%08lx - phys_avail[%d]=%08lx\n",
+				   j, phys_avail[j], j+1, phys_avail[j+1]);
 	}
 	physmem = btoc(physsz);	
 
