@@ -322,7 +322,7 @@ ENTRY(copyinstr)
 	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
-ENTRY(subyte)
+ENTRY(subyte_radix)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	stb  %r4, 0(%r3)
