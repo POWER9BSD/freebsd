@@ -248,7 +248,6 @@ cpu_topo(void)
 {
 	kobj_class_t cls = plat_obj->ops->cls;
 
-	printf("%s name: %s\n", __func__, cls->name);
 	return (PLATFORM_SMP_TOPO(plat_obj));
 }
 #endif
