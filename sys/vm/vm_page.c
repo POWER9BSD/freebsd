@@ -615,8 +615,6 @@ vm_page_startup(vm_offset_t vaddr)
 	new_end = trunc_page(new_end);
 	mapped = pmap_map(&vaddr, new_end, end,
 	    VM_PROT_READ | VM_PROT_WRITE);
-	printf("boot_pages %d new_end %#lx end %#lx mapped %#lx\n",
-		   boot_pages, new_end, end, mapped);
 	bzero((void *)mapped, end - new_end);
 	uma_startup((void *)mapped, boot_pages);
 
