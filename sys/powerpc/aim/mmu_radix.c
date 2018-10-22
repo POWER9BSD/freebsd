@@ -5073,7 +5073,6 @@ METHOD(remove_all) vm_page_t m)
 	int pvh_gen, md_gen;
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
-	UNTESTED();
 	KASSERT((m->oflags & VPO_UNMANAGED) == 0,
 	    ("pmap_remove_all: page %p is not managed", m));
 	SLIST_INIT(&free);
