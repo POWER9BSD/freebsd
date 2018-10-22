@@ -1190,7 +1190,7 @@ free_pv_entry(pmap_t pmap, pv_entry_t pv)
 	struct pv_chunk *pc;
 	int idx, field, bit;
 
-#ifdef VERBOSE_PMAP
+#ifdef VERBOSE_PV
 	if (pmap != kernel_pmap)
 		printf("%s(%p, %p)\n", __func__, pmap, pv);
 #endif
@@ -2668,7 +2668,7 @@ retry:
 			pv = get_pv_entry(pmap, &lock);
 			pv->pv_va = va;
 		}
-#ifdef VERBOSE_PMAP
+#ifdef VERBOSE_PV
 		else
 			printf("reassigning pv: %p to pmap: %p\n",
 				   pv, pmap);
@@ -5176,7 +5176,7 @@ METHOD(remove_pages) pmap_t pmap)
 					}
 				} else {
 					pmap_resident_count_dec(pmap, 1);
-#ifdef VERBOSE_PMAP
+#ifdef VERBOSE_PV
 					printf("freeing pv (%p, %p)\n",
 						   pmap, pv);
 #endif
