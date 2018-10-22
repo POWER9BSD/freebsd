@@ -2873,7 +2873,6 @@ out:
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
 
-	MPASS(m == PHYS_TO_VM_PAGE(m->phys_addr));
 #if 0
 	if (pmap != kernel_pmap)
 		printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -> returned %d\n", pmap, va,
@@ -3401,6 +3400,7 @@ METHODVOID(init)
 				 vm_page_array_size));
 		mpte->pindex = pmap_l3e_pindex(VM_MIN_KERNEL_ADDRESS) + i;
 		mpte->phys_addr = KPTphys + (i << PAGE_SHIFT);
+		MPASS(PHYS_TO_VM_PAGE(mpte->phys_addr) == mpte);
 		//pmap_insert_pt_page(kernel_pmap, mpte);
 		mpte->wire_count = 1;
 	}
@@ -3763,8 +3763,6 @@ METHOD(object_init_pt) pmap_t pmap, vm_offset_t addr, vm_object_t object,
 	vm_paddr_t pa, ptepa;
 	vm_page_t p, pdpg;
 	vm_memattr_t ma;
-
-	UNTESTED(); /* fix up */
 
 	CTR6(KTR_PMAP, "%s(%p, %#x, %p, %u, %#x)", __func__, pmap, addr,
 	    object, pindex, size);
