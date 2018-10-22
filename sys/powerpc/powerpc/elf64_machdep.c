@@ -277,10 +277,10 @@ elf64_dump_thread(struct thread *td, void *dst, size_t *off)
 }
 
 bool
-elf_is_ifunc_reloc(Elf_Size r_info __unused)
+elf_is_ifunc_reloc(Elf_Size r_info)
 {
 
-	return (false);
+	return (ELF_R_TYPE(r_info) == R_PPC64_IRELATIVE);
 }
 
 /* Process one elf relocation with addend. */

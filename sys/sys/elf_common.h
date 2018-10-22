@@ -1188,6 +1188,7 @@ typedef struct {
 #define	R_PPC64_DTPMOD64	68
 #define	R_PPC64_TPREL64		73
 #define	R_PPC64_DTPREL64	78
+#define	R_PPC64_IRELATIVE	248
 
 /*
  * TLS relocations
