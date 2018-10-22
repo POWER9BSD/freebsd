@@ -29,8 +29,8 @@
  * $FreeBSD$
  */
 
-#ifndef __X86_IFUNC_H
-#define	__X86_IFUNC_H
+#ifndef __POWERPC_IFUNC_H
+#define	__POWERPC_IFUNC_H
 
 #define	DEFINE_IFUNC(qual, ret_type, name, args, resolver_qual)		\
     resolver_qual ret_type (*name##_resolver(void))args __used;		\
