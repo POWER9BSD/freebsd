@@ -52,7 +52,7 @@ static size_t fragsz;
 
 struct dump_pa dump_map[DUMPSYS_MD_PA_NPAIRS];
 
-#if !defined(__powerpc__) && !defined(__sparc__)
+#if !defined(__sparc__)
 void
 dumpsys_gen_pa_init(void)
 {
@@ -254,13 +254,8 @@ cb_dumphdr(struct dump_pa *mdp, int seqnr, void *arg)
 	phdr.p_type = PT_LOAD;
 	phdr.p_flags = PF_R;			/* XXX */
 	phdr.p_offset = fileofs;
-#ifdef __powerpc__
-	phdr.p_vaddr = (do_minidump? mdp->pa_start : ~0L);
-	phdr.p_paddr = (do_minidump? ~0L : mdp->pa_start);
-#else
 	phdr.p_vaddr = mdp->pa_start;
 	phdr.p_paddr = mdp->pa_start;
-#endif
 	phdr.p_filesz = size;
 	phdr.p_memsz = size;
 	phdr.p_align = PAGE_SIZE;
@@ -290,10 +285,8 @@ dumpsys_generic(struct dumperinfo *di)
 	size_t hdrsz;
 	int error;
 
-#ifndef __powerpc__
 	if (do_minidump)
 		return (minidumpsys(di));
-#endif
 
 	bzero(&ehdr, sizeof(ehdr));
 	ehdr.e_ident[EI_MAG0] = ELFMAG0;

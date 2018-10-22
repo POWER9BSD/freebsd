@@ -485,7 +485,7 @@ link_elf_link_preload_finish(linker_file_t lf)
 	if (error)
 		return (error);
 
-#if defined(__i386__) || defined(__amd64__)
+#if defined(__i386__) || defined(__amd64__) || defined(__powerpc64__)
 	/* Now ifuncs. */
 	error = link_elf_reloc_local(lf, true);
 	if (error != 0)
@@ -996,7 +996,7 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 	if (error)
 		goto out;
 
-#if defined(__i386__) || defined(__amd64__)
+#if defined(__i386__) || defined(__amd64__) || defined(__powerpc64__)
 	/* Now ifuncs. */
 	error = link_elf_reloc_local(lf, true);
 	if (error != 0)
