@@ -1657,7 +1657,7 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 		printf("l1phys=%lx\n", l1phys);
 	MPASS((l1phys & (RADIX_PGD_SIZE-1)) == 0);
 	for (int i = 0; i < RADIX_PGD_SIZE/PAGE_SIZE; i++)
-		pagezero((void*)PHYS_TO_DMAP(parttab_phys + i*PAGE_SIZE));
+		pagezero((void*)PHYS_TO_DMAP(l1phys + i*PAGE_SIZE));
 	kernel_pmap->pm_pml1 = (pml1_entry_t *)PHYS_TO_DMAP(l1phys);
 
 	mmu_radix_dmap_populate(hwphyssz);
@@ -1837,7 +1837,7 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
 	proctab0pa = moea64_bootstrap_alloc(proctab_size, proctab_size);
 	for (int i = 0; i < proctab_size/PAGE_SIZE; i++)
-		pagezero((void*)PHYS_TO_DMAP(parttab_phys + i*PAGE_SIZE));
+		pagezero((void*)PHYS_TO_DMAP(proctab0pa + i*PAGE_SIZE));
 
 	mmu_radix_setup_pagetables(hwphyssz);
 }
