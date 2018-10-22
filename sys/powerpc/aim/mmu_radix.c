@@ -1388,6 +1388,23 @@ pmap_try_insert_pv_entry(pmap_t pmap, vm_offset_t va, vm_page_t m,
 		return (FALSE);
 }
 
+vm_paddr_t phys_avail_debug[2*VM_PHYSSEG_MAX];
+static void
+validate_addr(vm_paddr_t addr, vm_size_t size)
+{
+	vm_paddr_t end = addr + size;
+	bool found = false;
+
+	for (int i = 0; i < 2*phys_avail_count; i += 2) {
+		if (addr >= phys_avail_debug[i] &&
+			end <= phys_avail_debug[i+1]) {
+			found = true;
+			break;
+		}
+	}
+	KASSERT(found, ("%#lx-%#lx outside of initial phys_avail array",
+					addr, end));
+}
 
 #define DMAP_PAGE_BITS (RPTE_VALID | RPTE_LEAF | RPTE_EAA_MASK | PG_M | PG_A)
 
@@ -1470,6 +1487,7 @@ mmu_radix_setup_pagetables(vm_size_t hwphyssz)
 
 	ptpages = allocpages(2);
 	l1phys = moea64_bootstrap_alloc(RADIX_PGD_SIZE, RADIX_PGD_SIZE);
+	validate_addr(l1phys, RADIX_PGD_SIZE);
 	if (bootverbose)
 		printf("l1phys=%lx\n", l1phys);
 	MPASS((l1phys & (RADIX_PGD_SIZE-1)) == 0);
@@ -1627,6 +1645,8 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 		}
 	}
 	qsort(phys_avail, 2*phys_avail_count, sizeof(phys_avail[0]), pa_cmp);
+	for (i = 0; i < 2*phys_avail_count; i++)
+		phys_avail_debug[i] = phys_avail[i];
 
 	/* Remove physical available regions marked for removal (~0) */
 	if (rm_pavail) {
@@ -1649,11 +1669,13 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 	if (isa3_pid_bits == 0)
 		isa3_pid_bits = 20;
 	parttab_phys = moea64_bootstrap_alloc(PARTTAB_SIZE, PARTTAB_SIZE);
+	validate_addr(parttab_phys, PARTTAB_SIZE);
 	for (int i = 0; i < PARTTAB_SIZE/PAGE_SIZE; i++)
 		pagezero((void*)PHYS_TO_DMAP(parttab_phys + i*PAGE_SIZE));
 
 	proctab_size = 1UL << PROCTAB_SIZE_SHIFT;
 	proctab0pa = moea64_bootstrap_alloc(proctab_size, proctab_size);
+	validate_addr(proctab0pa, proctab_size);
 	for (int i = 0; i < proctab_size/PAGE_SIZE; i++)
 		pagezero((void*)PHYS_TO_DMAP(proctab0pa + i*PAGE_SIZE));
 
