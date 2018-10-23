@@ -36,5 +36,3 @@ AGP_DEBUG		opt_agp.h
 
 MIKROTIK
 
-USE_IFUNCS		opt_global.h
-

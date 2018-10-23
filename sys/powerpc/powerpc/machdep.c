@@ -255,6 +255,7 @@ void aim_early_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry,
 void aim_cpu_init(vm_offset_t toc);
 void booke_cpu_init(void);
 
+#ifdef __powerpc64__
 static void
 fake_preload_metadata(void)
 {
@@ -306,7 +307,8 @@ fake_preload_metadata(void)
 	fake_preload[i] = 0;
 	preload_metadata = (void *)fake_preload;
 }
-
+#endif
+ 
 uintptr_t
 powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
     uint32_t mdp_cookie)
@@ -387,8 +389,10 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 #endif
 		}
 	} else {
+#ifdef __powerpc64__
 		fake_preload_metadata();
 		kmdp = preload_search_by_type("elf kernel");
+#endif
 		init_static_kenv(init_kenv, sizeof(init_kenv));
 		ofw_bootargs = true;
 	}
@@ -471,7 +475,9 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	if (bootverbose)
 		printf("enabling translation\n");
 	mtmsr(psl_kernset & ~PSL_EE);
+#ifdef __powerpc64__
 	link_elf_ireloc(kmdp);
+#endif
 	/*
 	 * Initialize params/tunables that are derived from memsize
 	 */

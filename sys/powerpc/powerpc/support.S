@@ -43,6 +43,8 @@
 .abiversion _CALL_ELF
 #endif
 
+#define ENTRY_RADIX(x) ENTRY(x ## _radix)
+	
 .macro PROLOGUE
 	mflr	%r0 
 	std	%r0, 16(%r1)
@@ -270,7 +272,7 @@ ENTRY(pagezero)
  * copyout(from_kernel, to_user, len)
  *         %r3,        %r4,    %r5
  */
-ENTRY(copyout)
+ENTRY_RADIX(copyout)
 	PROLOGUE
 	SET_COPYFAULT raddr=%r4 rpcb=%r7
 	bl bcopy_generic 
@@ -278,7 +280,7 @@ ENTRY(copyout)
 	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 
-ENTRY(copyin)
+ENTRY_RADIX(copyin)
 	PROLOGUE
 	SET_COPYFAULT raddr=%r3 rpcb=%r7
 	bl bcopy_generic
@@ -291,7 +293,7 @@ ENTRY(copyin)
  *
  */
 	
-ENTRY(copyinstr_radix)
+ENTRY_RADIX(copyinstr)
 	PROLOGUE
 	SET_COPYFAULT raddr=%r3 rpcb=%r7
 	addi	%r9, %r5, 1
@@ -322,11 +324,7 @@ ENTRY(copyinstr_radix)
 	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
-#ifdef USE_IFUNCS
-ENTRY(subyte_radix)
-#else
-ENTRY(subyte)
-#endif	
+ENTRY_RADIX(subyte)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	stb  %r4, 0(%r3)
@@ -342,7 +340,7 @@ ENTRY(suword)
 	EPILOGUE
 #endif	
 
-ENTRY(suword32)
+ENTRY_RADIX(suword32)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	stw  %r4, 0(%r3)
@@ -350,13 +348,13 @@ ENTRY(suword32)
 	EPILOGUE
 
 #ifdef __powerpc64__	
-ENTRY(suword64)
+ENTRY_RADIX(suword64)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	std  %r4, 0(%r3) 
 	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
-ENTRY(suword)
+ENTRY_RADIX(suword)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	std  %r4, 0(%r3) 
@@ -364,14 +362,14 @@ ENTRY(suword)
 	EPILOGUE
 #endif	
 	
-ENTRY(fubyte)
+ENTRY_RADIX(fubyte)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	lbz %r3, 0(%r3)
 	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
-ENTRY(fuword16)
+ENTRY_RADIX(fuword16)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	lhz %r3, 0(%r3)
@@ -387,7 +385,7 @@ ENTRY(fueword)
 	CLEAR_FAULT rpcb=%r7 clobber=1
 	EPILOGUE
 #endif	
-ENTRY(fueword32)
+ENTRY_RADIX(fueword32)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	lwz  %r0, 0(%r3)
@@ -396,7 +394,7 @@ ENTRY(fueword32)
 	EPILOGUE
 
 #ifdef __powerpc64__
-ENTRY(fueword)	
+ENTRY_RADIX(fueword)	
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	ld  %r0, 0(%r3)
@@ -404,7 +402,7 @@ ENTRY(fueword)
 	CLEAR_FAULT rpcb=%r7 clobber=0
 	EPILOGUE
 
-ENTRY(fueword64)
+ENTRY_RADIX(fueword64)
 	PROLOGUE
 	SET_FUSUFAULT raddr=%r3 rpcb=%r7
 	ld  %r0, 0(%r3)
@@ -430,11 +428,7 @@ ENTRY(fueword64)
 	EPILOGUE	
 .endm
 	
-#ifndef __powerpc64__
-ENTRY(casueword)
-	CASUEWORD32 raddr=%r3 rpcb=%r7
-#endif	
-ENTRY(casueword32)
+ENTRY_RADIX(casueword32)
 	CASUEWORD32 raddr=%r3 rpcb=%r7
 
 .macro CASUEWORD64 raddr rpcb
@@ -455,10 +449,10 @@ ENTRY(casueword32)
 .endm
 
 #ifdef __powerpc64__
-ENTRY(casueword)
+ENTRY_RADIX(casueword)
 	CASUEWORD64 raddr=%r3 rpcb=%r7
 
-ENTRY(casueword64)
+ENTRY_RADIX(casueword64)
 	CASUEWORD64 raddr=%r3 rpcb=%r7
 #endif
 	

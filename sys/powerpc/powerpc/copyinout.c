@@ -72,9 +72,133 @@ __FBSDID("$FreeBSD$");
 #include <machine/vmparam.h>
 #include <machine/ifunc.h>
 
-#ifdef notyet
+#ifdef __powerpc64__
+int subyte_hash(volatile void *addr, int byte);
+int subyte_radix(volatile void *addr, int byte);
+int copyinstr_hash(const void *udaddr, void *kaddr, size_t len, size_t *done);
+int copyinstr_radix(const void *udaddr, void *kaddr, size_t len, size_t *done);
+int copyout_hash(const void *kaddr, void *udaddr, size_t len);
+int copyout_radix(const void *kaddr, void *udaddr, size_t len);
+int copyin_hash(const void *uaddr, void *kaddr, size_t len);
+int copyin_radix(const void *uaddr, void *kaddr, size_t len);
+int suword32_hash(volatile void *addr, int word);
+int suword32_radix(volatile void *addr, int word);
+int suword_hash(volatile void *addr, long word);
+int suword_radix(volatile void *addr, long word);
+int suword64_hash(volatile void *addr, int64_t word);
+int suword64_radix(volatile void *addr, int64_t word);
+int fubyte_hash(volatile const void *addr);
+int fubyte_radix(volatile const void *addr);
+int fuword16_hash(volatile const void *addr);
+int fuword16_radix(volatile const void *addr);
+int fueword32_hash(volatile const void *addr, int32_t *val);
+int fueword32_radix(volatile const void *addr, int32_t *val);
+int fueword64_hash(volatile const void *addr, int64_t *val);
+int fueword64_radix(volatile const void *addr, int64_t *val);
+int fueword_hash(volatile const void *addr, long *val);
+int fueword_radix(volatile const void *addr, long *val);
+int casueword32_hash(volatile uint32_t *addr, uint32_t old, uint32_t *oldvalp,
+	uint32_t new);
+int casueword32_radix(volatile uint32_t *addr, uint32_t old, uint32_t *oldvalp,
+	uint32_t new);
+int casueword_hash(volatile u_long *addr, u_long old, u_long *oldvalp,
+	u_long new);
+int casueword_radix(volatile u_long *addr, u_long old, u_long *oldvalp,
+	u_long new);
+#define FUNCNAME(x) x ## _hash
+
+DEFINE_IFUNC(, int, subyte, (volatile void *, int), static)
+{
+
+	return (disable_radix ?
+	    subyte_hash : subyte_radix);
+}
+DEFINE_IFUNC(, int, copyinstr, (const void *, void *, size_t, size_t *), static)
+{
+
+	return (disable_radix ?
+	    copyinstr_hash : copyinstr_radix);
+}
+DEFINE_IFUNC(, int, copyin, (const void *, void *, size_t), static)
+{
+
+	return (disable_radix ?
+	    copyin_hash : copyin_radix);
+}
+DEFINE_IFUNC(, int, copyout, (const void *, void *, size_t), static)
+{
+
+	return (disable_radix ?
+	    copyout_hash : copyout_radix);
+}
+DEFINE_IFUNC(, int, suword, (volatile void *, long), static)
+{
+
+	return (disable_radix ?
+	    suword_hash : suword_radix);
+}
+DEFINE_IFUNC(, int, suword32, (volatile void *, int), static)
+{
+
+	return (disable_radix ?
+	    suword32_hash : suword32_radix);
+}
+DEFINE_IFUNC(, int, suword64, (volatile void *, int64_t), static)
+{
+
+	return (disable_radix ?
+			suword64_hash : suword64_radix);
+}
+DEFINE_IFUNC(, int, fubyte, (volatile const void *), static)
+{
+
+	return (disable_radix ?
+	    fubyte_hash : fubyte_radix);
+}
+DEFINE_IFUNC(, int, fuword16, (volatile const void *), static)
+{
+
+	return (disable_radix ?
+	    fuword16_hash : fuword16_radix);
+}
+DEFINE_IFUNC(, int, fueword32, (volatile const void *, int32_t *), static)
+{
+
+	return (disable_radix ?
+	    fueword32_hash : fueword32_radix);
+}
+DEFINE_IFUNC(, int, fueword64, (volatile const void *, int64_t *), static)
+{
+
+	return (disable_radix ?
+	    fueword64_hash : fueword64_radix);
+}
+DEFINE_IFUNC(, int, fueword, (volatile const void *, long *), static)
+{
+
+	return (disable_radix ?
+	    fueword_hash : fueword_radix);
+}
+DEFINE_IFUNC(, int, casueword32, (volatile uint32_t *, uint32_t, uint32_t *, uint32_t), static)
+{
+
+	return (disable_radix ?
+	    casueword32_hash : casueword32_radix);
+}
+DEFINE_IFUNC(, int, casueword, (volatile u_long *, u_long, u_long *, u_long), static)
+{
+
+	return (disable_radix ?
+	    casueword_hash : casueword_radix);
+}
+
+#else
+#define FUNCNAME(x) x 
+#endif
+
+
 int
-copyout(const void *kaddr, void *udaddr, size_t len)
+FUNCNAME(copyout)(const void *kaddr, void *udaddr, size_t len)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -113,7 +237,7 @@ copyout(const void *kaddr, void *udaddr, size_t len)
 }
 
 int
-copyin(const void *udaddr, void *kaddr, size_t len)
+FUNCNAME(copyin)(const void *udaddr, void *kaddr, size_t len)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -150,15 +274,9 @@ copyin(const void *udaddr, void *kaddr, size_t len)
 	td->td_pcb->pcb_onfault = NULL;
 	return (0);
 }
-#endif
-#ifdef USE_IFUNCS
-int subyte_hash(volatile void *addr, int byte);
-int subyte_radix(volatile void *addr, int byte);
-int copyinstr_hash(const void *udaddr, void *kaddr, size_t len, size_t *done);
-int copyinstr_radix(const void *udaddr, void *kaddr, size_t len, size_t *done);
 
 int
-copyinstr_hash(const void *udaddr, void *kaddr, size_t len, size_t *done)
+FUNCNAME(copyinstr)(const void *udaddr, void *kaddr, size_t len, size_t *done)
 {
 	const char	*up;
 	char		*kp;
@@ -191,7 +309,7 @@ copyinstr_hash(const void *udaddr, void *kaddr, size_t len, size_t *done)
 }
 
 int
-subyte_hash(volatile void *addr, int byte)
+FUNCNAME(subyte)(volatile void *addr, int byte)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -217,24 +335,10 @@ subyte_hash(volatile void *addr, int byte)
 	td->td_pcb->pcb_onfault = NULL;
 	return (0);
 }
-DEFINE_IFUNC(, int, subyte, (volatile void *, int), static)
-{
 
-	return (disable_radix ?
-	    subyte_hash : subyte_radix);
-}
-DEFINE_IFUNC(, int, copyinstr, (const void *, void *, size_t, size_t *), static)
-{
-
-	return (disable_radix ?
-	    copyinstr_hash : copyinstr_radix);
-}
-
-#endif
-#ifdef notyet
 #ifdef __powerpc64__
 int
-suword32(volatile void *addr, int word)
+suword32_hash(volatile void *addr, int word)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -263,7 +367,7 @@ suword32(volatile void *addr, int word)
 #endif
 
 int
-suword(volatile void *addr, long word)
+FUNCNAME(suword)(volatile void *addr, long word)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -292,9 +396,9 @@ suword(volatile void *addr, long word)
 
 #ifdef __powerpc64__
 int
-suword64(volatile void *addr, int64_t word)
+suword64_hash(volatile void *addr, int64_t word)
 {
-	return (suword(addr, (long)word));
+	return (suword_hash(addr, (long)word));
 }
 #else
 int
@@ -305,7 +409,7 @@ suword32(volatile void *addr, int32_t word)
 #endif
 
 int
-fubyte(volatile const void *addr)
+FUNCNAME(fubyte)(volatile const void *addr)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -334,7 +438,7 @@ fubyte(volatile const void *addr)
 }
 
 int
-fuword16(volatile const void *addr)
+FUNCNAME(fuword16)(volatile const void *addr)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -362,7 +466,7 @@ fuword16(volatile const void *addr)
 }
 
 int
-fueword32(volatile const void *addr, int32_t *val)
+FUNCNAME(fueword32)(volatile const void *addr, int32_t *val)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -391,7 +495,7 @@ fueword32(volatile const void *addr, int32_t *val)
 
 #ifdef __powerpc64__
 int
-fueword64(volatile const void *addr, int64_t *val)
+fueword64_hash(volatile const void *addr, int64_t *val)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -420,7 +524,7 @@ fueword64(volatile const void *addr, int64_t *val)
 #endif
 
 int
-fueword(volatile const void *addr, long *val)
+FUNCNAME(fueword)(volatile const void *addr, long *val)
 {
 	struct		thread *td;
 	pmap_t		pm;
@@ -448,7 +552,7 @@ fueword(volatile const void *addr, long *val)
 }
 
 int
-casueword32(volatile uint32_t *addr, uint32_t old, uint32_t *oldvalp,
+FUNCNAME(casueword32)(volatile uint32_t *addr, uint32_t old, uint32_t *oldvalp,
     uint32_t new)
 {
 	struct thread *td;
@@ -501,7 +605,7 @@ casueword(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
 }
 #else
 int
-casueword(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
+casueword_hash(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
 {
 	struct thread *td;
 	pmap_t pm;
@@ -542,5 +646,4 @@ casueword(volatile u_long *addr, u_long old, u_long *oldvalp, u_long new)
 	*oldvalp = val;
 	return (0);
 }
-#endif
 #endif

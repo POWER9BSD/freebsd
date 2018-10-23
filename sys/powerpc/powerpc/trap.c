@@ -546,15 +546,19 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 	printf("   lr              = 0x%" PRIxPTR " (0x%" PRIxPTR ")\n",
 	    frame->lr, frame->lr - (register_t)(__startkernel - KERNBASE));
 	printf("   curthread       = %p\n", curthread);
-	if (!cold && curthread != NULL)
+#ifdef __powerpc64__
+	if (!cold && curthread != NULL && !disable_radix)
 		printf("          pid = %d, comm = %s asid: %lu\n",
 			   curthread->td_proc->p_pid, curthread->td_name,
 			   vmspace_pmap(curthread->td_proc->p_vmspace)->pm_pid);
+#endif
 	printf("\n");
 }
 
+#ifdef __powerpc64__
 extern int copy_fault(void);
 extern int fusufault(void);
+#endif
 
 /*
  * Handles a fatal fault when we have onfault state to recover.  Returns
@@ -563,23 +567,42 @@ extern int fusufault(void);
 static int
 handle_onfault(struct trapframe *frame)
 {
-	uint64_t dispatch;
+	struct          thread *td;
+	jmp_buf         *fb;
 
-	dispatch = (uintptr_t)curthread->td_pcb->pcb_onfault;
-	if (__predict_true(dispatch == 0))
-		return (0);
-	switch (dispatch) {
-		case 1:
-			frame->srr0 = (uintptr_t)copy_fault;
-			break;
-		case 2:
-			frame->srr0 = (uintptr_t)fusufault;
-			break;
-		default:
-			panic("unrecognized fault code %lx\n", dispatch);
+#ifdef __powerpc64__	
+	if (disable_radix == 0) {
+		uint64_t dispatch = (uintptr_t)curthread->td_pcb->pcb_onfault;
+		if (__predict_true(dispatch == 0))
+			return (0);
+		switch (dispatch) {
+			case 1:
+				frame->srr0 = (uintptr_t)copy_fault;
+				break;
+			case 2:
+				frame->srr0 = (uintptr_t)fusufault;
+				break;
+			default:
+				panic("unrecognized fault code %lx\n", dispatch);
+		}
+		return (1);
 	}
-	return (1);
+#endif
+	td = curthread;
+	fb = td->td_pcb->pcb_onfault;
+	if (fb != NULL) {
+		frame->srr0 = (*fb)->_jb[FAULTBUF_LR];
+		frame->fixreg[1] = (*fb)->_jb[FAULTBUF_R1];
+		frame->fixreg[2] = (*fb)->_jb[FAULTBUF_R2];
+		frame->fixreg[3] = 1;
+		frame->cr = (*fb)->_jb[FAULTBUF_CR];
+		bcopy(&(*fb)->_jb[FAULTBUF_R14], &frame->fixreg[14],
+			  18 * sizeof(register_t));
+		td->td_pcb->pcb_onfault = NULL; /* Returns twice, not thrice */
+		return (1);
 
+	}
+	return (0);
 }
 
 int

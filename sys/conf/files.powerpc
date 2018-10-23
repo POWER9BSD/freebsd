@@ -244,7 +244,7 @@ powerpc/powerpc/sigcode64.S	optional	powerpc64
 powerpc/powerpc/swtch32.S	optional	powerpc | powerpcspe
 powerpc/powerpc/swtch64.S	optional	powerpc64
 powerpc/powerpc/stack_machdep.c	optional	ddb | stack
-powerpc/powerpc/support.S	standard
+powerpc/powerpc/support.S	optional	powerpc64
 powerpc/powerpc/syncicache.c	standard
 powerpc/powerpc/sys_machdep.c	standard
 powerpc/powerpc/trap.c		standard
