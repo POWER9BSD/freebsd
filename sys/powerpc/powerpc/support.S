@@ -291,7 +291,7 @@ ENTRY(copyin)
  *
  */
 	
-ENTRY(copyinstr)
+ENTRY(copyinstr_radix)
 	PROLOGUE
 	SET_COPYFAULT raddr=%r3 rpcb=%r7
 	addi	%r9, %r5, 1

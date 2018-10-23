@@ -150,9 +150,15 @@ copyin(const void *udaddr, void *kaddr, size_t len)
 	td->td_pcb->pcb_onfault = NULL;
 	return (0);
 }
+#endif
+#ifdef USE_IFUNCS
+int subyte_hash(volatile void *addr, int byte);
+int subyte_radix(volatile void *addr, int byte);
+int copyinstr_hash(const void *udaddr, void *kaddr, size_t len, size_t *done);
+int copyinstr_radix(const void *udaddr, void *kaddr, size_t len, size_t *done);
 
 int
-copyinstr(const void *udaddr, void *kaddr, size_t len, size_t *done)
+copyinstr_hash(const void *udaddr, void *kaddr, size_t len, size_t *done)
 {
 	const char	*up;
 	char		*kp;
@@ -183,10 +189,7 @@ copyinstr(const void *udaddr, void *kaddr, size_t len, size_t *done)
 
 	return (rv);
 }
-#endif
-#ifdef USE_IFUNCS
-int subyte_hash(volatile void *addr, int byte);
-int subyte_radix(volatile void *addr, int byte);
+
 int
 subyte_hash(volatile void *addr, int byte)
 {
@@ -220,6 +223,13 @@ DEFINE_IFUNC(, int, subyte, (volatile void *, int), static)
 	return (disable_radix ?
 	    subyte_hash : subyte_radix);
 }
+DEFINE_IFUNC(, int, copyinstr, (const void *, void *, size_t, size_t *), static)
+{
+
+	return (disable_radix ?
+	    copyinstr_hash : copyinstr_radix);
+}
+
 #endif
 #ifdef notyet
 #ifdef __powerpc64__
