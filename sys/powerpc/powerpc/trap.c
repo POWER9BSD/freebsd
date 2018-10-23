@@ -260,7 +260,6 @@ trap(struct trapframe *frame)
 #if defined(__powerpc64__) && defined(AIM)
 		case EXC_ISE:
 		case EXC_DSE:
-			trap_fatal(frame);
 			if (handle_user_slb_spill(&p->p_vmspace->vm_pmap,
 			    (type == EXC_ISE) ? frame->srr0 : frame->dar) != 0){
 				sig = SIGSEGV;
