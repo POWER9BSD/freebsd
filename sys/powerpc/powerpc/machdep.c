@@ -141,7 +141,11 @@ __FBSDID("$FreeBSD$");
 vm_paddr_t phys_avail[PHYSMAP_SIZE + 2];
 vm_paddr_t dump_avail[PHYSMAP_SIZE + 2];
 
+#ifdef __powerpc64__
 int disable_radix = 0;
+#else
+int disable_radix = 1;
+#endif
 
 int cold = 1;
 #ifdef __powerpc64__
