@@ -157,7 +157,7 @@ RB_PROTOTYPE(pvo_tree, pvo_entry, pvo_plink, pvo_vaddr_compare);
 
 struct pmap {
 	struct	pmap_statistics	pm_stats;
-	struct	mtx		pm_mtx __aligned(CACHE_LINE_SIZE);
+	struct	mtx		pm_mtx;
 #ifdef __powerpc64__
 	union {
 		/* HPT support */
@@ -177,7 +177,7 @@ struct pmap {
 			uint64_t	pm_pid; /* PIDR value */
 			int pm_flags;
 		};
-	};
+	} __aligned(CACHE_LINE_SIZE);
 #else
 	register_t	pm_sr[16];
 #endif
