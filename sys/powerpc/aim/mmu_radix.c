@@ -86,6 +86,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/trap.h>
 #include <machine/mmuvar.h>
 #include <machine/pmap_private.h>
+#include <machine/ifunc.h>
 
 #ifdef INVARIANTS
 #include <vm/uma_dbg.h>
@@ -4996,27 +4997,6 @@ retry:
 }
 
 /*
- * Returns TRUE if the given page is mapped individually or as part of
- * a 2mpage.  Otherwise, returns FALSE.
- */
-boolean_t
-pmap_page_is_mapped(vm_page_t m)
-{
-	struct rwlock *lock;
-	boolean_t rv;
-
-	if ((m->oflags & VPO_UNMANAGED) != 0)
-		return (FALSE);
-	lock = VM_PAGE_TO_PV_LIST_LOCK(m);
-	rw_rlock(lock);
-	rv = !TAILQ_EMPTY(&m->md.pv_list) ||
-	    ((m->flags & PG_FICTITIOUS) == 0 &&
-	    !TAILQ_EMPTY(&pa_to_pvh(VM_PAGE_TO_PHYS(m))->pv_list));
-	rw_runlock(lock);
-	return (rv);
-}
-
-/*
  * Destroy all managed, non-wired mappings in the given user-space
  * pmap.  This pmap cannot be active on any processor besides the
  * caller.
@@ -5914,3 +5894,41 @@ DB_SHOW_COMMAND(pte, pmap_print_pte)
 	pmap_pte_walk(pmap->pm_pml1, va);
 }
 #endif
+
+/*
+ * Returns TRUE if the given page is mapped individually or as part of
+ * a 2mpage.  Otherwise, returns FALSE.
+ */
+static boolean_t
+mmu_radix_pmap_page_is_mapped(vm_page_t m)
+{
+	struct rwlock *lock;
+	boolean_t rv;
+
+	if ((m->oflags & VPO_UNMANAGED) != 0)
+		return (FALSE);
+	lock = VM_PAGE_TO_PV_LIST_LOCK(m);
+	rw_rlock(lock);
+	rv = !TAILQ_EMPTY(&m->md.pv_list) ||
+	    ((m->flags & PG_FICTITIOUS) == 0 &&
+	    !TAILQ_EMPTY(&pa_to_pvh(VM_PAGE_TO_PHYS(m))->pv_list));
+	rw_runlock(lock);
+	return (rv);
+}
+
+static boolean_t
+mmu_hash_pmap_page_is_mapped(vm_page_t m)
+{
+
+	return (!LIST_EMPTY(&(m)->md.mdpg_pvoh));
+}
+
+
+DEFINE_IFUNC(, boolean_t, pmap_page_is_mapped, (vm_page_t), static)
+{
+
+	return (disable_radix ?
+	    mmu_hash_pmap_page_is_mapped : mmu_radix_pmap_page_is_mapped);
+}
+
+
