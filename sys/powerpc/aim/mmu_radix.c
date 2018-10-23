@@ -2043,12 +2043,6 @@ static u_long pmap_l2e_demotions;
 SYSCTL_ULONG(_vm_pmap_l2e, OID_AUTO, demotions, CTLFLAG_RD,
     &pmap_l2e_demotions, 0, "1GB page demotions");
 
-bool
-pmap_ps_enabled(pmap_t pmap)
-{
-	return (pg_ps_enabled && (pmap->pm_flags & PMAP_PDE_SUPERPAGE) != 0);
-}
-
 VISIBILITY void
 METHOD(clear_modify) vm_page_t m)
 {
@@ -5895,6 +5889,18 @@ DB_SHOW_COMMAND(pte, pmap_print_pte)
 }
 #endif
 
+static bool
+mmu_radix_pmap_ps_enabled(pmap_t pmap)
+{
+	return (pg_ps_enabled && (pmap->pm_flags & PMAP_PDE_SUPERPAGE) != 0);
+}
+
+static bool
+mmu_hash_pmap_ps_enabled(pmap_t pmap)
+{
+	return (false);
+}
+
 /*
  * Returns TRUE if the given page is mapped individually or as part of
  * a 2mpage.  Otherwise, returns FALSE.
@@ -5929,6 +5935,13 @@ DEFINE_IFUNC(, boolean_t, pmap_page_is_mapped, (vm_page_t), static)
 
 	return (disable_radix ?
 	    mmu_hash_pmap_page_is_mapped : mmu_radix_pmap_page_is_mapped);
+}
+
+DEFINE_IFUNC(, bool, pmap_ps_enabled, (pmap_t), static)
+{
+
+	return (disable_radix ?
+			mmu_hash_pmap_ps_enabled : mmu_radix_pmap_ps_enabled);
 }
 
 
