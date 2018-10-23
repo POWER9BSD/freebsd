@@ -224,7 +224,7 @@ struct	md_page {
 };
 
 #define	pmap_page_get_memattr(m)	((m)->md.mdpg_cache_attrs)
-boolean_t pmap_page_is_mapped(vm_page_t m);
+boolean_t	pmap_page_is_mapped(vm_page_t m);
 
 /*
  * Return the VSID corresponding to a given virtual address.
