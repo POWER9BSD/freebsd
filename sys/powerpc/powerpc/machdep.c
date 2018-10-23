@@ -468,10 +468,10 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	 * Bring up MMU
 	 */
 	pmap_bootstrap(startkernel, endkernel);
-	link_elf_ireloc(kmdp);
 	if (bootverbose)
 		printf("enabling translation\n");
 	mtmsr(psl_kernset & ~PSL_EE);
+	link_elf_ireloc(kmdp);
 	/*
 	 * Initialize params/tunables that are derived from memsize
 	 */
