@@ -255,6 +255,58 @@ void aim_early_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry,
 void aim_cpu_init(vm_offset_t toc);
 void booke_cpu_init(void);
 
+static void
+fake_preload_metadata(void)
+{
+	static uint32_t fake_preload[35];
+#if 0
+#ifdef DDB
+	vm_offset_t zstart = 0, zend = 0;
+#endif
+#endif
+	int i;
+
+	i = 0;
+
+	fake_preload[i++] = MODINFO_NAME;
+	fake_preload[i++] = strlen("kernel") + 1;
+	strcpy((char*)&fake_preload[i++], "kernel");
+	i += 1;
+	fake_preload[i++] = MODINFO_TYPE;
+	fake_preload[i++] = strlen("elf kernel") + 1;
+	strcpy((char*)&fake_preload[i++], "elf kernel");
+	i += 3;
+	fake_preload[i++] = MODINFO_ADDR;
+	fake_preload[i++] = sizeof(vm_offset_t);
+	*(vm_offset_t *)&fake_preload[i++] =
+	    (vm_offset_t)(__startkernel);
+	i += 1;
+	fake_preload[i++] = MODINFO_SIZE;
+	fake_preload[i++] = sizeof(vm_offset_t);
+	fake_preload[i++] = (vm_offset_t)&__endkernel -
+	    (vm_offset_t)(__startkernel);
+	i += 1;
+#ifdef DDB
+#if 0
+	if (*(uint32_t *)KERNVIRTADDR == MAGIC_TRAMP_NUMBER) {
+		fake_preload[i++] = MODINFO_METADATA|MODINFOMD_SSYM;
+		fake_preload[i++] = sizeof(vm_offset_t);
+		fake_preload[i++] = *(uint32_t *)(KERNVIRTADDR + 4);
+		fake_preload[i++] = MODINFO_METADATA|MODINFOMD_ESYM;
+		fake_preload[i++] = sizeof(vm_offset_t);
+		fake_preload[i++] = *(uint32_t *)(KERNVIRTADDR + 8);
+		lastaddr = *(uint32_t *)(KERNVIRTADDR + 8);
+		zend = lastaddr;
+		zstart = *(uint32_t *)(KERNVIRTADDR + 4);
+		db_fetch_ksymtab(zstart, zend);
+	}
+#endif
+#endif
+	fake_preload[i++] = 0;
+	fake_preload[i] = 0;
+	preload_metadata = (void *)fake_preload;
+}
+
 uintptr_t
 powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
     uint32_t mdp_cookie)
@@ -335,11 +387,12 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 #endif
 		}
 	} else {
-		kmdp = preload_search_by_type("elf kernel");	
+		fake_preload_metadata();
+		kmdp = preload_search_by_type("elf kernel");
 		init_static_kenv(init_kenv, sizeof(init_kenv));
 		ofw_bootargs = true;
 	}
-	link_elf_ireloc(kmdp);
+
 	/* Store boot environment state */
 	OF_initial_setup((void *)fdt, NULL, (int (*)(void *))ofentry);
 
@@ -415,6 +468,7 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	 * Bring up MMU
 	 */
 	pmap_bootstrap(startkernel, endkernel);
+	link_elf_ireloc(kmdp);
 	if (bootverbose)
 		printf("enabling translation\n");
 	mtmsr(psl_kernset & ~PSL_EE);
