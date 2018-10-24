@@ -203,6 +203,12 @@ cnttzd(uint64_t word)
 	return (int)result;
 }
 
+static __inline void
+ptesync(void)
+{
+	__asm __volatile("ptesync");
+}
+
 static inline int
 bsfq(uint64_t word)
 {
