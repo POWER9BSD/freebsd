@@ -59,6 +59,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/md_var.h>
 #include <machine/mmuvar.h>
 #include <machine/smp.h>
+#include <machine/ifunc.h>
 
 #include "mmu_if.h"
 
@@ -80,6 +81,89 @@ vm_offset_t virtual_end;
 
 int pmap_bootstrapped;
 
+#ifdef __powerpc64__
+#define DEFINE_PMAP_IFUNC(ret, name, args)				\
+	static ret kobj_ ## name args;						\
+	ret mmu_radix_ ## name args;				\
+	DEFINE_IFUNC(, ret, name, args, static)		\
+	{											\
+		return (disable_radix ?						\
+				kobj_ ## name : mmu_radix_ ## name);	\
+	}
+
+
+#ifdef notyet
+DEFINE_PMAP_IFUNC(int, pmap_pinit, (pmap_t));
+#else
+static int kobj_pmap_pinit(pmap_t pmap);
+int mmu_radix_pmap_pinit(pmap_t pmap);
+int
+pmap_pinit(pmap_t pmap)
+{
+	if (disable_radix)
+		return (kobj_pmap_pinit(pmap));
+	else
+		return (mmu_radix_pmap_pinit(pmap));
+}
+#endif
+
+DEFINE_PMAP_IFUNC(void, pmap_activate, (struct thread *));
+DEFINE_PMAP_IFUNC(void, pmap_advise, (pmap_t, vm_offset_t, vm_offset_t, int));
+DEFINE_PMAP_IFUNC(void, pmap_align_superpage, (vm_object_t, vm_ooffset_t,
+	vm_offset_t *, vm_size_t));
+DEFINE_PMAP_IFUNC(void, pmap_clear_modify, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, pmap_copy, (pmap_t, pmap_t, vm_offset_t, vm_size_t, vm_offset_t));
+DEFINE_PMAP_IFUNC(int, pmap_decode_kernel_ptr, (vm_offset_t, int *, vm_offset_t *));
+DEFINE_PMAP_IFUNC(int, pmap_enter, (pmap_t, vm_offset_t, vm_page_t, vm_prot_t, u_int, int8_t));
+DEFINE_PMAP_IFUNC(void, pmap_enter_quick, (pmap_t, vm_offset_t, vm_page_t, vm_prot_t));
+DEFINE_PMAP_IFUNC(void, pmap_enter_object, (pmap_t, vm_offset_t, vm_offset_t, vm_page_t,
+	vm_prot_t));
+DEFINE_PMAP_IFUNC(vm_paddr_t, pmap_extract, (pmap_t, vm_offset_t));
+DEFINE_PMAP_IFUNC(vm_page_t, pmap_extract_and_hold, (pmap_t, vm_offset_t, vm_prot_t));
+DEFINE_PMAP_IFUNC(void, pmap_kenter, (vm_offset_t, vm_paddr_t));
+DEFINE_PMAP_IFUNC(vm_paddr_t, pmap_kextract, (vm_offset_t));
+DEFINE_PMAP_IFUNC(void, pmap_kremove, (vm_offset_t));
+DEFINE_PMAP_IFUNC(void, pmap_object_init_pt, (pmap_t, vm_offset_t, vm_object_t, vm_pindex_t,
+	vm_size_t));
+DEFINE_PMAP_IFUNC(boolean_t, pmap_is_modified, (vm_page_t));
+DEFINE_PMAP_IFUNC(boolean_t, pmap_is_prefaultable, (pmap_t, vm_offset_t));
+DEFINE_PMAP_IFUNC(boolean_t, pmap_is_referenced, (vm_page_t));
+DEFINE_PMAP_IFUNC(boolean_t, pmap_page_exists_quick, (pmap_t, vm_page_t));
+DEFINE_PMAP_IFUNC(void, pmap_page_init, (vm_page_t));
+DEFINE_PMAP_IFUNC(boolean_t, pmap_page_is_mapped, (vm_page_t));
+DEFINE_PMAP_IFUNC(int, pmap_page_wired_mappings, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, pmap_protect, (pmap_t, vm_offset_t, vm_offset_t, vm_prot_t));
+DEFINE_PMAP_IFUNC(bool, pmap_ps_enabled, (pmap_t));
+DEFINE_PMAP_IFUNC(void, pmap_qenter, (vm_offset_t, vm_page_t *, int));
+DEFINE_PMAP_IFUNC(void, pmap_qremove, (vm_offset_t, int));
+DEFINE_PMAP_IFUNC(vm_offset_t, pmap_quick_enter_page, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, pmap_quick_remove_page, (vm_offset_t));
+DEFINE_PMAP_IFUNC(boolean_t, pmap_ts_referenced, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, pmap_release, (pmap_t));
+DEFINE_PMAP_IFUNC(void, pmap_remove, (pmap_t, vm_offset_t, vm_offset_t));
+DEFINE_PMAP_IFUNC(void, pmap_remove_all, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, pmap_remove_pages, (pmap_t));
+DEFINE_PMAP_IFUNC(void, pmap_remove_write, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, pmap_unwire, (pmap_t, vm_offset_t, vm_offset_t));
+DEFINE_PMAP_IFUNC(void, pmap_zero_page, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, pmap_zero_page_area, (vm_page_t, int, int));
+
+#define FUNCNAME(x) kobj_ ## x
+#define VISIBILITY static
+
+static bool
+kobj_pmap_ps_enabled(pmap_t pmap)
+{
+	return (false);
+}
+
+#else
+#define FUNCNAME(x) x
+#define VISIBILITY
+#endif
+
+
+
 #ifdef AIM
 int
 pvo_vaddr_compare(struct pvo_entry *a, struct pvo_entry *b)
@@ -93,9 +177,16 @@ pvo_vaddr_compare(struct pvo_entry *a, struct pvo_entry *b)
 RB_GENERATE(pvo_tree, pvo_entry, pvo_plink, pvo_vaddr_compare);
 #endif
 	
+VISIBILITY void
+FUNCNAME(pmap_activate)(struct thread *td)
+{
 
-void
-pmap_advise(pmap_t pmap, vm_offset_t start, vm_offset_t end, int advice)
+	CTR2(KTR_PMAP, "%s(%p)", __func__, td);
+	MMU_ACTIVATE(mmu_obj, td);
+}
+
+VISIBILITY void
+FUNCNAME(pmap_advise)(pmap_t pmap, vm_offset_t start, vm_offset_t end, int advice)
 {
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %#x, %d)", __func__, pmap, start, end,
@@ -103,16 +194,30 @@ pmap_advise(pmap_t pmap, vm_offset_t start, vm_offset_t end, int advice)
 	MMU_ADVISE(mmu_obj, pmap, start, end, advice);
 }
 
-void
-pmap_clear_modify(vm_page_t m)
+/*
+ *	Increase the starting virtual address of the given mapping if a
+ *	different alignment might result in more superpage mappings.
+ */
+VISIBILITY void
+FUNCNAME(pmap_align_superpage)(vm_object_t object, vm_ooffset_t offset,
+    vm_offset_t *addr, vm_size_t size)
+{
+
+	CTR5(KTR_PMAP, "%s(%p, %#x, %p, %#x)", __func__, object, offset, addr,
+	    size);
+	MMU_ALIGN_SUPERPAGE(mmu_obj, object, offset, addr, size);
+}
+
+VISIBILITY void
+FUNCNAME(pmap_clear_modify)(vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	MMU_CLEAR_MODIFY(mmu_obj, m);
 }
 
-void
-pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
+VISIBILITY void
+FUNCNAME(pmap_copy)(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
     vm_size_t len, vm_offset_t src_addr)
 {
 
@@ -139,8 +244,16 @@ pmap_copy_pages(vm_page_t ma[], vm_offset_t a_offset, vm_page_t mb[],
 	MMU_COPY_PAGES(mmu_obj, ma, a_offset, mb, b_offset, xfersize);
 }
 
-int
-pmap_enter(pmap_t pmap, vm_offset_t va, vm_page_t p, vm_prot_t prot,
+VISIBILITY int
+FUNCNAME(pmap_decode_kernel_ptr)(vm_offset_t addr, int *is_user, vm_offset_t *decoded)
+{
+
+	CTR2(KTR_PMAP, "%s(%#jx)", __func__, (uintmax_t)addr);
+	return (MMU_DECODE_KERNEL_PTR(mmu_obj, addr, is_user, decoded));
+}
+
+VISIBILITY int
+FUNCNAME(pmap_enter)(pmap_t pmap, vm_offset_t va, vm_page_t p, vm_prot_t prot,
     u_int flags, int8_t psind)
 {
 
@@ -149,8 +262,8 @@ pmap_enter(pmap_t pmap, vm_offset_t va, vm_page_t p, vm_prot_t prot,
 	return (MMU_ENTER(mmu_obj, pmap, va, p, prot, flags, psind));
 }
 
-void
-pmap_enter_object(pmap_t pmap, vm_offset_t start, vm_offset_t end,
+VISIBILITY void
+FUNCNAME(pmap_enter_object)(pmap_t pmap, vm_offset_t start, vm_offset_t end,
     vm_page_t m_start, vm_prot_t prot)
 {
 
@@ -159,28 +272,52 @@ pmap_enter_object(pmap_t pmap, vm_offset_t start, vm_offset_t end,
 	MMU_ENTER_OBJECT(mmu_obj, pmap, start, end, m_start, prot);
 }
 
-void
-pmap_enter_quick(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot)
+VISIBILITY void
+FUNCNAME(pmap_enter_quick)(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot)
 {
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %p, %#x)", __func__, pmap, va, m, prot);
 	MMU_ENTER_QUICK(mmu_obj, pmap, va, m, prot);
 }
 
-vm_paddr_t
-pmap_extract(pmap_t pmap, vm_offset_t va)
+VISIBILITY vm_paddr_t
+FUNCNAME(pmap_extract)(pmap_t pmap, vm_offset_t va)
 {
 
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, pmap, va);
 	return (MMU_EXTRACT(mmu_obj, pmap, va));
 }
 
-vm_page_t
-pmap_extract_and_hold(pmap_t pmap, vm_offset_t va, vm_prot_t prot)
+VISIBILITY vm_page_t
+FUNCNAME(pmap_extract_and_hold)(pmap_t pmap, vm_offset_t va, vm_prot_t prot)
 {
 
 	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, pmap, va, prot);
 	return (MMU_EXTRACT_AND_HOLD(mmu_obj, pmap, va, prot));
+}
+
+VISIBILITY void
+FUNCNAME(pmap_kenter)(vm_offset_t va, vm_paddr_t pa)
+{
+
+	CTR3(KTR_PMAP, "%s(%#x, %#x)", __func__, va, pa);
+	MMU_KENTER(mmu_obj, va, pa);
+}
+
+VISIBILITY vm_paddr_t
+FUNCNAME(pmap_kextract)(vm_offset_t va)
+{
+
+	CTR2(KTR_PMAP, "%s(%#x)", __func__, va);
+	return (MMU_KEXTRACT(mmu_obj, va));
+}
+
+VISIBILITY void
+FUNCNAME(pmap_kremove)(vm_offset_t va)
+{
+
+	CTR2(KTR_PMAP, "%s(%#x)", __func__, va);
+	return (MMU_KREMOVE(mmu_obj, va));
 }
 
 void
@@ -199,32 +336,42 @@ pmap_init(void)
 	MMU_INIT(mmu_obj);
 }
 
-boolean_t
-pmap_is_modified(vm_page_t m)
+VISIBILITY boolean_t
+FUNCNAME(pmap_is_modified)(vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	return (MMU_IS_MODIFIED(mmu_obj, m));
 }
 
-boolean_t
-pmap_is_prefaultable(pmap_t pmap, vm_offset_t va)
+VISIBILITY boolean_t
+FUNCNAME(pmap_is_prefaultable)(pmap_t pmap, vm_offset_t va)
 {
 
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, pmap, va);
 	return (MMU_IS_PREFAULTABLE(mmu_obj, pmap, va));
 }
 
-boolean_t
-pmap_is_referenced(vm_page_t m)
+VISIBILITY boolean_t
+FUNCNAME(pmap_is_referenced)(vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	return (MMU_IS_REFERENCED(mmu_obj, m));
 }
 
-int
-pmap_ts_referenced(vm_page_t m)
+VISIBILITY void
+FUNCNAME(pmap_object_init_pt)(pmap_t pmap, vm_offset_t addr, vm_object_t object,
+    vm_pindex_t pindex, vm_size_t size)
+{
+
+	CTR6(KTR_PMAP, "%s(%p, %#x, %p, %u, %#x)", __func__, pmap, addr,
+	    object, pindex, size);
+	MMU_OBJECT_INIT_PT(mmu_obj, pmap, addr, object, pindex, size);
+}
+
+VISIBILITY int
+FUNCNAME(pmap_ts_referenced)(vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
@@ -240,42 +387,32 @@ pmap_map(vm_offset_t *virt, vm_paddr_t start, vm_paddr_t end, int prot)
 	return (MMU_MAP(mmu_obj, virt, start, end, prot));
 }
 
-void
-pmap_object_init_pt(pmap_t pmap, vm_offset_t addr, vm_object_t object,
-    vm_pindex_t pindex, vm_size_t size)
-{
-
-	CTR6(KTR_PMAP, "%s(%p, %#x, %p, %u, %#x)", __func__, pmap, addr,
-	    object, pindex, size);
-	MMU_OBJECT_INIT_PT(mmu_obj, pmap, addr, object, pindex, size);
-}
-
-boolean_t
-pmap_page_exists_quick(pmap_t pmap, vm_page_t m)
+VISIBILITY boolean_t
+FUNCNAME(pmap_page_exists_quick)(pmap_t pmap, vm_page_t m)
 {
 
 	CTR3(KTR_PMAP, "%s(%p, %p)", __func__, pmap, m);
 	return (MMU_PAGE_EXISTS_QUICK(mmu_obj, pmap, m));
 }
 
-void
-pmap_page_init(vm_page_t m)
+VISIBILITY void
+FUNCNAME(pmap_page_init)(vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	MMU_PAGE_INIT(mmu_obj, m);
 }
 
-int
-pmap_page_wired_mappings(vm_page_t m)
+VISIBILITY int
+FUNCNAME(pmap_page_wired_mappings)(vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	return (MMU_PAGE_WIRED_MAPPINGS(mmu_obj, m));
 }
 
-int
-pmap_pinit(pmap_t pmap)
+VISIBILITY int
+FUNCNAME(pmap_pinit)(pmap_t pmap)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
@@ -291,8 +428,8 @@ pmap_pinit0(pmap_t pmap)
 	MMU_PINIT0(mmu_obj, pmap);
 }
 
-void
-pmap_protect(pmap_t pmap, vm_offset_t start, vm_offset_t end, vm_prot_t prot)
+VISIBILITY void
+FUNCNAME(pmap_protect)(pmap_t pmap, vm_offset_t start, vm_offset_t end, vm_prot_t prot)
 {
 
 	CTR5(KTR_PMAP, "%s(%p, %#x, %#x, %#x)", __func__, pmap, start, end,
@@ -300,80 +437,80 @@ pmap_protect(pmap_t pmap, vm_offset_t start, vm_offset_t end, vm_prot_t prot)
 	MMU_PROTECT(mmu_obj, pmap, start, end, prot);
 }
 
-void
-pmap_qenter(vm_offset_t start, vm_page_t *m, int count)
+VISIBILITY void
+FUNCNAME(pmap_qenter)(vm_offset_t start, vm_page_t *m, int count)
 {
 
 	CTR4(KTR_PMAP, "%s(%#x, %p, %d)", __func__, start, m, count);
 	MMU_QENTER(mmu_obj, start, m, count);
 }
 
-void
-pmap_qremove(vm_offset_t start, int count)
+VISIBILITY void
+FUNCNAME(pmap_qremove)(vm_offset_t start, int count)
 {
 
 	CTR3(KTR_PMAP, "%s(%#x, %d)", __func__, start, count);
 	MMU_QREMOVE(mmu_obj, start, count);
 }
 
-void
-pmap_release(pmap_t pmap)
+VISIBILITY void
+FUNCNAME(pmap_release)(pmap_t pmap)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
 	MMU_RELEASE(mmu_obj, pmap);
 }
 
-void
-pmap_remove(pmap_t pmap, vm_offset_t start, vm_offset_t end)
+VISIBILITY void
+FUNCNAME(pmap_remove)(pmap_t pmap, vm_offset_t start, vm_offset_t end)
 {
 
 	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, pmap, start, end);
 	MMU_REMOVE(mmu_obj, pmap, start, end);
 }
 
-void
-pmap_remove_all(vm_page_t m)
+VISIBILITY void
+FUNCNAME(pmap_remove_all)(vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	MMU_REMOVE_ALL(mmu_obj, m);
 }
 
-void
-pmap_remove_pages(pmap_t pmap)
+VISIBILITY void
+FUNCNAME(pmap_remove_pages)(pmap_t pmap)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, pmap);
 	MMU_REMOVE_PAGES(mmu_obj, pmap);
 }
 
-void
-pmap_remove_write(vm_page_t m)
+VISIBILITY void
+FUNCNAME(pmap_remove_write)(vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	MMU_REMOVE_WRITE(mmu_obj, m);
 }
 
-void
-pmap_unwire(pmap_t pmap, vm_offset_t start, vm_offset_t end)
+VISIBILITY void
+FUNCNAME(pmap_unwire)(pmap_t pmap, vm_offset_t start, vm_offset_t end)
 {
 
 	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, pmap, start, end);
 	MMU_UNWIRE(mmu_obj, pmap, start, end);
 }
 
-void
-pmap_zero_page(vm_page_t m)
+VISIBILITY void
+FUNCNAME(pmap_zero_page)(vm_page_t m)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	MMU_ZERO_PAGE(mmu_obj, m);
 }
 
-void
-pmap_zero_page_area(vm_page_t m, int off, int size)
+VISIBILITY void
+FUNCNAME(pmap_zero_page_area)(vm_page_t m, int off, int size)
 {
 
 	CTR4(KTR_PMAP, "%s(%p, %d, %d)", __func__, m, off, size);
@@ -389,33 +526,11 @@ pmap_mincore(pmap_t pmap, vm_offset_t addr, vm_paddr_t *locked_pa)
 }
 
 void
-pmap_activate(struct thread *td)
-{
-
-	CTR2(KTR_PMAP, "%s(%p)", __func__, td);
-	MMU_ACTIVATE(mmu_obj, td);
-}
-
-void
 pmap_deactivate(struct thread *td)
 {
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, td);
 	MMU_DEACTIVATE(mmu_obj, td);
-}
-
-/*
- *	Increase the starting virtual address of the given mapping if a
- *	different alignment might result in more superpage mappings.
- */
-void
-pmap_align_superpage(vm_object_t object, vm_ooffset_t offset,
-    vm_offset_t *addr, vm_size_t size)
-{
-
-	CTR5(KTR_PMAP, "%s(%p, %#x, %p, %#x)", __func__, object, offset, addr,
-	    size);
-	MMU_ALIGN_SUPERPAGE(mmu_obj, object, offset, addr, size);
 }
 
 /*
@@ -478,36 +593,12 @@ pmap_unmapdev(vm_offset_t va, vm_size_t size)
 	MMU_UNMAPDEV(mmu_obj, va, size);
 }
 
-vm_paddr_t
-pmap_kextract(vm_offset_t va)
-{
-
-	CTR2(KTR_PMAP, "%s(%#x)", __func__, va);
-	return (MMU_KEXTRACT(mmu_obj, va));
-}
-
-void
-pmap_kenter(vm_offset_t va, vm_paddr_t pa)
-{
-
-	CTR3(KTR_PMAP, "%s(%#x, %#x)", __func__, va, pa);
-	MMU_KENTER(mmu_obj, va, pa);
-}
-
 void
 pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma)
 {
 
 	CTR4(KTR_PMAP, "%s(%#x, %#x, %#x)", __func__, va, pa, ma);
 	MMU_KENTER_ATTR(mmu_obj, va, pa, ma);
-}
-
-void
-pmap_kremove(vm_offset_t va)
-{
-
-	CTR2(KTR_PMAP, "%s(%#x)", __func__, va);
-	return (MMU_KREMOVE(mmu_obj, va));
 }
 
 int
@@ -519,13 +610,6 @@ pmap_map_user_ptr(pmap_t pm, volatile const void *uaddr, void **kaddr,
 	return (MMU_MAP_USER_PTR(mmu_obj, pm, uaddr, kaddr, ulen, klen));
 }
 
-int
-pmap_decode_kernel_ptr(vm_offset_t addr, int *is_user, vm_offset_t *decoded)
-{
-
-	CTR2(KTR_PMAP, "%s(%#jx)", __func__, (uintmax_t)addr);
-	return (MMU_DECODE_KERNEL_PTR(mmu_obj, addr, is_user, decoded));
-}
 
 boolean_t
 pmap_dev_direct_mapped(vm_paddr_t pa, vm_size_t size)
@@ -567,15 +651,15 @@ dumpsys_pa_init(void)
 	return (MMU_SCAN_INIT(mmu_obj));
 }
 
-vm_offset_t
-pmap_quick_enter_page(vm_page_t m)
+VISIBILITY vm_offset_t
+FUNCNAME(pmap_quick_enter_page)(vm_page_t m)
 {
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	return (MMU_QUICK_ENTER_PAGE(mmu_obj, m));
 }
 
-void
-pmap_quick_remove_page(vm_offset_t addr)
+VISIBILITY void
+FUNCNAME(pmap_quick_remove_page)(vm_offset_t addr)
 {
 	CTR2(KTR_PMAP, "%s(%#x)", __func__, addr);
 	MMU_QUICK_REMOVE_PAGE(mmu_obj, addr);
@@ -637,3 +721,11 @@ pmap_is_valid_memattr(pmap_t pmap __unused, vm_memattr_t mode)
 		return (FALSE);
 	}
 }
+
+VISIBILITY boolean_t
+FUNCNAME(pmap_page_is_mapped)(vm_page_t m)
+{
+
+	return (!LIST_EMPTY(&(m)->md.mdpg_pvoh));
+}
+
