@@ -51,16 +51,156 @@
 extern int nkpt;
 extern caddr_t crashdumpmap;
 
+#define RIC_FLUSH_TLB 0
+#define RIC_FLUSH_PWC 1
+#define RIC_FLUSH_ALL 2
+
+#define POWER9_TLB_SETS_RADIX	128	/* # sets in POWER9 TLB Radix mode */
+
+#define PPC_INST_TLBIE			0x7c000264
+#define PPC_INST_TLBIEL			0x7c000224
+#define PPC_INST_SLBIA			0x7c0003e4
+
+#define ___PPC_RA(a)	(((a) & 0x1f) << 16)
+#define ___PPC_RB(b)	(((b) & 0x1f) << 11)
+#define ___PPC_RS(s)	(((s) & 0x1f) << 21)
+#define ___PPC_RT(t)	___PPC_RS(t)
+#define ___PPC_R(r)	(((r) & 0x1) << 16)
+#define ___PPC_PRS(prs)	(((prs) & 0x1) << 17)
+#define ___PPC_RIC(ric)	(((ric) & 0x3) << 18)
+
+#define PPC_SLBIA(IH)	__XSTRING(.long PPC_INST_SLBIA | \
+				       ((IH & 0x7) << 21))
+#define	PPC_TLBIE_5(rb,rs,ric,prs,r)				\
+	__XSTRING(.long PPC_INST_TLBIE |								\
+			  ___PPC_RB(rb) | ___PPC_RS(rs) |						\
+			  ___PPC_RIC(ric) | ___PPC_PRS(prs) |					\
+			  ___PPC_R(r))
+
+#define	PPC_TLBIEL(rb,rs,ric,prs,r) \
+	 __XSTRING(.long PPC_INST_TLBIEL | \
+			   ___PPC_RB(rb) | ___PPC_RS(rs) |			\
+			   ___PPC_RIC(ric) | ___PPC_PRS(prs) |		\
+			   ___PPC_R(r))
+
+#define PPC_INVALIDATE_ERAT		PPC_SLBIA(7)
+
 static __inline void
 ttusync(void)
 {
 	__asm __volatile("eieio; tlbsync; ptesync" ::: "memory");
 }
 
+#define TLBIEL_INVAL_SEL_MASK	0xc00	/* invalidation selector */
+#define  TLBIEL_INVAL_PAGE	0x000	/* invalidate a single page */
+#define  TLBIEL_INVAL_SET_PID	0x400	/* invalidate a set for the current PID */
+#define  TLBIEL_INVAL_SET_LPID	0x800	/* invalidate a set for current LPID */
+#define  TLBIEL_INVAL_SET	0xc00	/* invalidate a set for all LPIDs */
+
+#define TLBIE_ACTUAL_PAGE_MASK		0xe0
+#define  TLBIE_ACTUAL_PAGE_4K		0x00
+#define  TLBIE_ACTUAL_PAGE_64K		0xa0
+#define  TLBIE_ACTUAL_PAGE_2M		0x20
+#define  TLBIE_ACTUAL_PAGE_1G		0x40
+
+#define TLBIE_PRS_PARTITION_SCOPE	0x0
+#define TLBIE_PRS_PROCESS_SCOPE	0x1
+
+#define TLBIE_RIC_INVALIDATE_TLB	0x0		/* Invalidate just TLB */
+#define TLBIE_RIC_INVALIDATE_PWC	0x1		/* Invalidate just PWC */
+#define TLBIE_RIC_INVALIDATE_ALL	0x2		/* Invalidate TLB, PWC,
+											 * cached {proc, part}tab entries
+											 */
+#define TLBIE_RIC_INVALIDATE_SEQ	0x3		/* HPT - only:
+											 * Invalidate a range of translations
+											 */
+
 static __inline void
-tlbie(vm_offset_t va) {
-	__asm __volatile("tlbie %0" :: "r"(va) : "memory");
+radix_tlbie(uint8_t ric, uint8_t prs, uint16_t is, uint32_t pid, uint32_t lpid,
+			vm_offset_t va, uint16_t ap)
+{
+	uint64_t rb, rs;
+
+	MPASS((va & PAGE_MASK) == 0);
+
+	rs = (32 << (uint64_t)pid) | lpid;
+	rb = va | is | ap;
+	__asm __volatile(PPC_TLBIE_5(%0, %1, %2, %3, 1) : :
+		"r" (rb), "r" (rs), "i" (ric), "i" (prs));
 	ttusync();
+}
+
+static __inline void
+radix_tlbie_invlpg_user_4k(uint32_t pid, vm_offset_t va)
+{
+
+	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PROCESS_SCOPE,
+		TLBIEL_INVAL_PAGE, pid, 0, va, TLBIE_ACTUAL_PAGE_4K);
+}
+
+static __inline void
+radix_tlbie_invlpg_user_2m(uint32_t pid, vm_offset_t va)
+{
+
+	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PROCESS_SCOPE,
+		TLBIEL_INVAL_PAGE, pid, 0, va, TLBIE_ACTUAL_PAGE_2M);
+}
+
+static __inline void
+radix_tlbie_invlpwc_user(uint32_t pid)
+{
+
+	radix_tlbie(TLBIE_RIC_INVALIDATE_PWC, TLBIE_PRS_PROCESS_SCOPE,
+		TLBIEL_INVAL_SET_PID, pid, 0, 0, 0);
+}
+
+static __inline void
+radix_tlbie_flush_user(uint32_t pid)
+{
+
+	radix_tlbie(TLBIE_RIC_INVALIDATE_ALL, TLBIE_PRS_PROCESS_SCOPE,
+		TLBIEL_INVAL_SET_PID, pid, 0, 0, 0);
+}
+
+
+static __inline void
+radix_tlbie_invlpg_kernel_4k(vm_offset_t va)
+{
+
+	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PARTITION_SCOPE,
+				TLBIEL_INVAL_PAGE, 1, 0, va, TLBIE_ACTUAL_PAGE_4K);
+}
+
+static __inline void
+radix_tlbie_invlpg_kernel_2m(vm_offset_t va)
+{
+
+	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PARTITION_SCOPE,
+				TLBIEL_INVAL_PAGE, 1, 0, va, TLBIE_ACTUAL_PAGE_2M);
+}
+
+static __inline void
+radix_tlbie_invlpg_kernel_1g(vm_offset_t va)
+{
+
+	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PARTITION_SCOPE,
+				TLBIEL_INVAL_PAGE, 1, 0, va, TLBIE_ACTUAL_PAGE_1G);
+}
+
+static __inline void
+radix_tlbie_invlpwc_kernel(void)
+{
+
+	radix_tlbie(TLBIE_RIC_INVALIDATE_PWC, TLBIE_PRS_PARTITION_SCOPE,
+		TLBIEL_INVAL_SET_LPID, 1, 0, 0, 0);
+}
+
+static __inline void
+radix_tlbie_flush_kernel(void)
+{
+
+	radix_tlbie(TLBIE_RIC_INVALIDATE_ALL, TLBIE_PRS_PARTITION_SCOPE,
+		TLBIEL_INVAL_SET_LPID, 1, 0, 0, 0);
 }
 
 static __inline vm_pindex_t

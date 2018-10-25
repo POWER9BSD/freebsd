@@ -38,7 +38,8 @@ pmap_kenter_temporary(vm_paddr_t pa, int i)
 
 	va = (vm_offset_t)crashdumpmap + (i * PAGE_SIZE);
 	pmap_kenter(va, pa);
-	tlbie(va);
+	ptesync();
+	radix_tlbie_invlpg_kernel_4k(va);
 	return ((void *)crashdumpmap);
 }
 
