@@ -293,44 +293,7 @@ static void mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr
 #define UNIMPLEMENTED() panic("%s not implemented", __func__)
 #define UNTESTED() panic("%s not yet tested", __func__)
 
-#define RIC_FLUSH_TLB 0
-#define RIC_FLUSH_PWC 1
-#define RIC_FLUSH_ALL 2
 
-#define POWER9_TLB_SETS_RADIX	128	/* # sets in POWER9 TLB Radix mode */
-
-#define PPC_INST_TLBIE			0x7c000264
-#define PPC_INST_TLBIEL			0x7c000224
-#define PPC_INST_SLBIA			0x7c0003e4
-
-#define TLBIEL_INVAL_SEL_MASK	0xc00	/* invalidation selector */
-#define  TLBIEL_INVAL_PAGE	0x000	/* invalidate a single page */
-#define  TLBIEL_INVAL_SET_LPID	0x800	/* invalidate a set for current LPID */
-#define  TLBIEL_INVAL_SET	0xc00	/* invalidate a set for all LPIDs */
-
-#define ___PPC_RA(a)	(((a) & 0x1f) << 16)
-#define ___PPC_RB(b)	(((b) & 0x1f) << 11)
-#define ___PPC_RS(s)	(((s) & 0x1f) << 21)
-#define ___PPC_RT(t)	___PPC_RS(t)
-#define ___PPC_R(r)	(((r) & 0x1) << 16)
-#define ___PPC_PRS(prs)	(((prs) & 0x1) << 17)
-#define ___PPC_RIC(ric)	(((ric) & 0x3) << 18)
-
-#define PPC_SLBIA(IH)	__XSTRING(.long PPC_INST_SLBIA | \
-				       ((IH & 0x7) << 21))
-#define	PPC_TLBIE_5(rb,rs,ric,prs,r)				\
-	__XSTRING(.long PPC_INST_TLBIE |								\
-			  ___PPC_RB(rb) | ___PPC_RS(rs) |						\
-			  ___PPC_RIC(ric) | ___PPC_PRS(prs) |					\
-			  ___PPC_R(r))
-
-#define	PPC_TLBIEL(rb,rs,ric,prs,r) \
-	 __XSTRING(.long PPC_INST_TLBIEL | \
-			   ___PPC_RB(rb) | ___PPC_RS(rs) |			\
-			   ___PPC_RIC(ric) | ___PPC_PRS(prs) |		\
-			   ___PPC_R(r))
-
-#define PPC_INVALIDATE_ERAT		PPC_SLBIA(7)
 
 /* Number of supported PID bits */
 static unsigned int isa3_pid_bits;
@@ -719,16 +682,43 @@ pmap_cache_bits(vm_memattr_t ma)
 static void
 pmap_invalidate_page(pmap_t pmap, vm_offset_t start)
 {
-	tlbie(start);
+	if (pmap == kernel_pmap)
+		radix_tlbie_invlpg_kernel_4k(start);
+	else
+		radix_tlbie_invlpg_user_4k(pmap->pm_pid, start);
+}
+
+static void
+pmap_invalidate_page_2m(pmap_t pmap, vm_offset_t start)
+{
+	if (pmap == kernel_pmap)
+		radix_tlbie_invlpg_kernel_2m(start);
+	else
+		radix_tlbie_invlpg_user_2m(pmap->pm_pid, start);
+}
+
+static void
+pmap_invalidate_pwc(pmap_t pmap)
+{
+	if (pmap == kernel_pmap)
+		radix_tlbie_invlpwc_kernel();
+	else
+		radix_tlbie_invlpwc_user(pmap->pm_pid);
 }
 
 static void
 pmap_invalidate_range(pmap_t pmap, vm_offset_t start, vm_offset_t end)
 {
-
-	while (start != end) {
-		tlbie(start);
-		start += PAGE_SIZE;
+	if (pmap == kernel_pmap) {
+		while (start < end) {
+			radix_tlbie_invlpg_kernel_4k(start);
+			start += PAGE_SIZE;
+		}
+	} else {
+		while (start < end) {
+			radix_tlbie_invlpg_user_4k(pmap->pm_pid, start);
+			start += PAGE_SIZE;
+		}
 	}
 }
 
@@ -736,9 +726,9 @@ static void
 pmap_invalidate_all(pmap_t pmap)
 {
 	if (pmap == kernel_pmap)
-		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
+		radix_tlbie_flush_kernel();
 	else
-		mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_LPID);
+		radix_tlbie_flush_user(pmap->pm_pid);
 }
 
 static void
@@ -756,10 +746,12 @@ pmap_invalidate_l3e_page(pmap_t pmap, vm_offset_t va, pml3_entry_t l3e)
 	 * single INVLPG suffices to invalidate the 2MB page mapping from the
 	 * TLB.
 	 */
-	if ((l3e & PG_PROMOTED) != 0)
+	if ((l3e & PG_PROMOTED) != 0) {
 		pmap_invalidate_range(pmap, va, va + L3_PAGE_SIZE - 1);
-	else
-		pmap_invalidate_page(pmap, va);
+	} else
+		pmap_invalidate_page_2m(pmap, va);
+
+	pmap_invalidate_pwc(pmap);
 }
 
 static __inline struct pv_chunk *
@@ -1937,7 +1929,7 @@ maybe_invlrng:
 			pmap_invalidate_range(pmap, va, sva);
 	}
 	if (anychanged) {
-		ttusync();
+		ptesync();
 		pmap_invalidate_all(pmap);
 	}
 	PMAP_UNLOCK(pmap);
@@ -2091,7 +2083,7 @@ restart:
 							(oldpte | RPTE_EAA_R) & ~(PG_M | PG_RW)))
 							   oldpte = *pte;
 						vm_page_dirty(m);
-						ttusync();
+						ptesync();
 						pmap_invalidate_page(pmap, va);
 					}
 				}
@@ -2118,7 +2110,7 @@ restart:
 		pte = pmap_l3e_to_pte(l3e, pv->pv_va);
 		if ((*pte & (PG_M | PG_RW)) == (PG_M | PG_RW)) {
 			atomic_clear_long(pte, PG_M);
-			ttusync();
+			ptesync();
 			pmap_invalidate_page(pmap, pv->pv_va);
 		}
 		PMAP_UNLOCK(pmap);
@@ -2136,6 +2128,7 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 	vm_offset_t end_addr = src_addr + len;
 	vm_offset_t va_next;
 	vm_page_t dst_pdpg, dstmpte, srcmpte;
+	bool invalidate_pwc;
 
 #ifndef FULL_FEATURED
 	return;
@@ -2150,6 +2143,7 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 		   __func__, dst_pmap, src_pmap, dst_addr, len, src_addr);
 #endif
 	lock = NULL;
+	invalidate_pwc = false;
 	if (dst_pmap < src_pmap) {
 		PMAP_LOCK(dst_pmap);
 		PMAP_LOCK(src_pmap);
@@ -2260,8 +2254,7 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 						 * the freed page table pages.
 						 * Invalidate those entries.
 						 */
-						pmap_invalidate_page(dst_pmap,
-						    addr);
+						invalidate_pwc = true;
 						vm_page_free_pages_toq(&free,
 						    true);
 					}
@@ -2275,6 +2268,8 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 		}
 	}
 out:
+	if (invalidate_pwc)
+		pmap_invalidate_pwc(dst_pmap);
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(src_pmap);
@@ -2410,7 +2405,7 @@ setpte:
 		pmap_pv_promote_l3e(pmap, va, newpde & PG_PS_FRAME, lockp);
 
 	pte_store(pde, PG_PROMOTED | newpde);
-
+	ptesync();
 	atomic_add_long(&pmap_l3e_promotions, 1);
 	CTR2(KTR_PMAP, "pmap_promote_l3e: success for va %#lx"
 	    " in pmap %p", va, pmap);
@@ -2686,8 +2681,10 @@ validate:
 		}
 		if ((origpte & PG_A) != 0)
 			pmap_invalidate_page(pmap, va);
-	} else
+	} else {
 		pte_store(pte, newpte);
+		ptesync();
+	}
 unchanged:
 
 #if VM_NRESERVLEVEL > 0
@@ -2704,7 +2701,6 @@ unchanged:
 
 	rv = KERN_SUCCESS;
 out:
-	ttusync();
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
@@ -2895,7 +2891,7 @@ mmu_radix_pmap_enter_object(pmap_t pmap, vm_offset_t start, vm_offset_t end,
 			    mpte, &lock);
 		m = TAILQ_NEXT(m, listq);
 	}
-	ttusync();
+	ptesync();
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
@@ -3016,7 +3012,7 @@ mmu_radix_pmap_enter_quick(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t p
 	lock = NULL;
 	PMAP_LOCK(pmap);
 	(void)pmap_enter_quick_locked(pmap, va, m, prot, NULL, &lock);
-	ttusync();
+	ptesync();
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(pmap);
@@ -3661,7 +3657,7 @@ mmu_radix_pmap_object_init_pt(pmap_t pmap, vm_offset_t addr, vm_object_t object,
 		}
 		PMAP_UNLOCK(pmap);
 	}
-	ttusync();
+	ptesync();
 }
 
 boolean_t
@@ -4236,7 +4232,7 @@ mmu_radix_pmap_qenter(vm_offset_t sva, vm_page_t *ma, int count)
 		}
 		pte++;
 	}
-	ttusync();
+	ptesync();
 	if (__predict_false((oldpte & RPTE_VALID) != 0))
 		pmap_invalidate_range(kernel_pmap, sva, sva + count *
 		    PAGE_SIZE);
@@ -4464,7 +4460,7 @@ static boolean_t
 pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
     struct rwlock **lockp)
 {
-	pml3_entry_t newpde, oldpde;
+	pml3_entry_t oldpde;
 	pt_entry_t *firstpte, newpte;
 	vm_paddr_t mptepa;
 	vm_page_t mpte;
@@ -4514,7 +4510,6 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	}
 	mptepa = VM_PAGE_TO_PHYS(mpte);
 	firstpte = (pt_entry_t *)PHYS_TO_DMAP(mptepa);
-	newpde = mptepa | PG_V | RPTE_SHIFT;
 	KASSERT((oldpde & PG_A) != 0,
 	    ("pmap_demote_l3e: oldpde is missing PG_A"));
 	KASSERT((oldpde & (PG_M | PG_RW)) != PG_RW,
@@ -4557,15 +4552,15 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	 * processor changing the setting of PG_A and/or PG_M between
 	 * the read above and the store below. 
 	 */
-	pte_store(l3e, newpde);
-
+	pde_store(l3e, mptepa);
+	ptesync();
 	/*
 	 * Demote the PV entry.
 	 */
 	if ((oldpde & PG_MANAGED) != 0)
 		pmap_pv_demote_l3e(pmap, va, oldpde & PG_PS_FRAME, lockp);
 
-	ttusync();
+
 	atomic_add_long(&pmap_l3e_demotions, 1);
 	CTR2(KTR_PMAP, "pmap_demote_l3e: success for va %#lx"
 	    " in pmap %p", va, pmap);
@@ -4598,6 +4593,7 @@ pmap_remove_kernel_l3e(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va)
 	 * Demote the mapping.
 	 */
 	pde_store(l3e, mptepa);
+	ptesync();
 }
 
 /*
@@ -5459,7 +5455,7 @@ mmu_radix_pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 		tmpva += PAGE_SIZE;
 		ppa += PAGE_SIZE;
 	}
-	ttusync();
+	ptesync();
 
 	return ((void *)(va + offset));
 }
