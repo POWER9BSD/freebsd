@@ -114,7 +114,7 @@
 #define	rd	%r4
 #define	rl	%r5
 
-#define	t1	%r7
+#define	t1	%r14
 #define	t2	%r8
 #define	t3	%r9
 #define	t4	%r10
@@ -128,13 +128,13 @@
 	std	%r11, -8(%r1)
 	std	%r12, -16(%r1)
 	std	%r13, -24(%r1)
-	std	%r7,  -32(%r1)
+	std	%r14,  -32(%r1)
 .endm	
 .macro LOADTMPS
 	ld	%r11, -8(%r1)
 	ld	%r12, -16(%r1)
 	ld	%r13, -24(%r1)
-	ld	%r7,  -32(%r1)
+	ld	%r14,  -32(%r1)
 .endm	
 
 .text
