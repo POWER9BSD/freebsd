@@ -123,7 +123,7 @@ radix_tlbie(uint8_t ric, uint8_t prs, uint16_t is, uint32_t pid, uint32_t lpid,
 
 	MPASS((va & PAGE_MASK) == 0);
 
-	rs = (32 << (uint64_t)pid) | lpid;
+	rs = ((uint64_t)pid << 32) | lpid;
 	rb = va | is | ap;
 	__asm __volatile(PPC_TLBIE_5(%0, %1, %2, %3, 1) : :
 		"r" (rb), "r" (rs), "i" (ric), "i" (prs));
