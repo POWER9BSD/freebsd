@@ -303,13 +303,16 @@ decr_get_timecount(struct timecounter *tc)
 void
 DELAY(int n)
 {
-	u_quad_t	tb, ttb;
+	volatile u_quad_t	tb, ttb;
 
 	TSENTER();
 	tb = mftb();
 	ttb = tb + howmany((uint64_t)n * 1000000, ps_per_tick);
-	while (tb < ttb)
+	while (tb < ttb) {
+		__compiler_membar();
 		tb = mftb();
+		__compiler_membar();
+	}
 	TSEXIT();
 }
 
