@@ -310,9 +310,11 @@ DELAY(int n)
 	ttb = tb + howmany((uint64_t)n * 1000000, ps_per_tick);
 	while (tb < ttb) {
 		__compiler_membar();
+		__asm __volatile("or 31,31,31"); /* Very Low - 1 fetch every 128 cycles */
 		tb = mftb();
 		__compiler_membar();
 	}
+	__asm __volatile("or 2,2,2"); /* Medium (Normal) priority */
 	TSEXIT();
 }
 
