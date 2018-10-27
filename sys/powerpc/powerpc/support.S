@@ -57,6 +57,23 @@
 	nop
 .endm
 
+/* XXX
+ * Note that %r12 is volatile and we can
+ * probably get away with just reloading
+ * the pcb in to %r7 - so we only really
+ * need to be saving one register here.
+ */
+.macro SAVETMPS
+	std	%r12, -8(%r1)
+	std	%r13, -16(%r1)
+	std	%r14, -24(%r1)
+.endm
+.macro LOADTMPS
+	ld	%r12, -8(%r1)
+	ld	%r13, -16(%r1)
+	ld	%r14, -24(%r1)
+.endm
+
 .macro VALIDATE_ADDR_COPY raddr
 	srdi  %r0, \raddr, 52
 	cmpwi %r0, 1
@@ -76,7 +93,16 @@
 .macro SET_COPYFAULT raddr rpcb
 	VALIDATE_ADDR_COPY \raddr
 	PCPU(%r9)
-	li %r0, 1
+	li %r0, COPYFAULT
+	ld  \rpcb, PC_CURPCB(%r9)
+	std %r0, PCB_ONFAULT(\rpcb)
+	SAVETMPS
+.endm
+
+.macro SET_COPYINSTRFAULT raddr rpcb
+	VALIDATE_ADDR_COPY \raddr
+	PCPU(%r9)
+	li %r0, COPINSTRYFAULT
 	ld  \rpcb, PC_CURPCB(%r9)
 	std %r0, PCB_ONFAULT(\rpcb)
 .endm
@@ -84,7 +110,7 @@
 .macro SET_FUSUFAULT raddr rpcb
 	VALIDATE_ADDR_FUSU \raddr
 	PCPU(%r9)
-	li  %r0, 2
+	li  %r0, FUSUFAULT
 	ld  \rpcb, PC_CURPCB(%r9)
 	std %r0, PCB_ONFAULT(\rpcb)
 .endm
@@ -124,19 +150,6 @@
 #define	t8	%r13
 
 #define Thresh	64	
-.macro SAVETMPS
-	std	%r11, -8(%r1)
-	std	%r12, -16(%r1)
-	std	%r13, -24(%r1)
-	std	%r14,  -32(%r1)
-.endm	
-.macro LOADTMPS
-	ld	%r11, -8(%r1)
-	ld	%r12, -16(%r1)
-	ld	%r13, -24(%r1)
-	ld	%r14,  -32(%r1)
-.endm	
-
 .text
 ENTRY(bcopy_generic)
 	cmplwi	0, %r5, 0
@@ -144,7 +157,6 @@ ENTRY(bcopy_generic)
 	mr	rs, %r3
 	dcbtst	0, rd
 	dcbt	0, rs
-	SAVETMPS
 	cmplwi	rl, Thresh
 	sub	t1, rs, rd
 	cmplw	cr1, t1, rl	// (dst-src) < len
@@ -249,7 +261,6 @@ ENTRY(bcopy_generic)
 
 	b	.Lsmall64
 .Lout:
-	LOADTMPS
 /* done */	
 .Lend:	
 	blr
@@ -278,6 +289,7 @@ ENTRY_RADIX(copyout)
 	bl bcopy_generic 
 	nop
 	CLEAR_FAULT rpcb=%r7 clobber=1
+	LOADTMPS
 	EPILOGUE
 
 ENTRY_RADIX(copyin)
@@ -286,6 +298,7 @@ ENTRY_RADIX(copyin)
 	bl bcopy_generic
 	nop
 	CLEAR_FAULT rpcb=%r7 clobber=1
+	LOADTMPS
 	EPILOGUE
 /*
  * copyinstr(const void *udaddr, void *kaddr, size_t len, size_t *done)
@@ -462,6 +475,12 @@ ENTRY(fusufault)
 	EPILOGUE
 
 ENTRY(copy_fault)
+	CLEAR_FAULT rpcb=%r7 clobber=0
+	li %r3, EFAULT
+	LOADTMPS
+	EPILOGUE
+
+ENTRY(copyinstr_fault)
 	CLEAR_FAULT rpcb=%r7 clobber=0
 	li %r3, EFAULT
 	EPILOGUE
