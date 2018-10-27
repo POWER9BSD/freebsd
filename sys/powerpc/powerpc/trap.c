@@ -840,34 +840,12 @@ trap_pfault(struct trapframe *frame, int user)
 		else
 			ftype = VM_PROT_READ;
 	}
-	/*
-	 * XXX note that we should probably always call pmap_nofault
-	 * and return immediately if it is able to satisfy the request.
-	 */
-	if (__predict_false((td->td_pflags & TDP_NOFAULTING) != 0)) {
-		/*
-		 * Due to both processor errata and lazy TLB invalidation when
-		 * access restrictions are removed from virtual pages, memory
-		 * accesses that are allowed by the physical mapping layer may
-		 * nonetheless cause one spurious page fault per virtual page. 
-		 * When the thread is executing a "no faulting" section that
-		 * is bracketed by vm_fault_{disable,enable}_pagefaults(),
-		 * every page fault is treated as a spurious page fault,
-		 * unless it accesses the same virtual address as the most
-		 * recent page fault within the same "no faulting" section.
-		 */
-		if ((td->td_md.md_spurflt_addr != eva ||
-			 (td->td_pflags & TDP_RESETSPUR) != 0) &&
-			pmap_nofault(&p->p_vmspace->vm_pmap, eva, ftype) == 0) {
-			/*
-			 * Do nothing to the TLB.  A stale TLB entry is
-			 * flushed automatically by a page fault.
-			 */
-			td->td_md.md_spurflt_addr = eva;
-			td->td_pflags &= ~TDP_RESETSPUR;
-			return (0);
-		}
-	} else {
+#ifdef __powerpc64__
+	if (__predict_true(disable_radix == false) &&
+		pmap_nofault(&p->p_vmspace->vm_pmap, eva, ftype) == 0)
+		return (0);
+
+	if (__predict_false((td->td_pflags & TDP_NOFAULTING) == 0)) {
 		/*
 		 * If we get a page fault while in a critical section, then
 		 * it is most likely a fatal kernel page fault.  The kernel
@@ -889,7 +867,7 @@ trap_pfault(struct trapframe *frame, int user)
 			return (-1);
 		}
 	}
-
+#endif
 	if (user) {
 		KASSERT(p->p_vmspace != NULL, ("trap_pfault: vmspace  NULL"));
 		map = &p->p_vmspace->vm_map;
