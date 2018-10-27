@@ -48,6 +48,7 @@ struct pmap_invl_gen {
 struct mdthread {
 	int	md_spinlock_count;	/* (k) */
 	register_t md_saved_msr;	/* (k) */
+	register_t md_spurflt_addr;	/* (k) Spurious page fault address. */
 	struct pmap_invl_gen md_invl_gen;
 };
 

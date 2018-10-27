@@ -96,7 +96,6 @@ __FBSDID("$FreeBSD$");
 static void pmap_pte_walk(pml1_entry_t *l1, vm_offset_t va);
 #endif
 
-
 int nkpt = 64;
 SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
     "Number of kernel page table pages allocated on bootup");
@@ -104,8 +103,6 @@ SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
 caddr_t crashdumpmap;
 
 SYSCTL_NODE(_vm, OID_AUTO, pmap, CTLFLAG_RD, 0, "VM/pmap parameters");
-
-#define FULL_FEATURED
 
 #ifdef FULL_FEATURED
 static int pg_ps_enabled = 1;
@@ -636,6 +633,44 @@ mmu_radix_pmap_ps_enabled(pmap_t pmap)
 	return (pg_ps_enabled && (pmap->pm_flags & PMAP_PDE_SUPERPAGE) != 0);
 }
 
+int
+pmap_nofault(pmap_t pmap, vm_offset_t va, vm_prot_t flags)
+{
+	pt_entry_t *pte;
+	pt_entry_t origpte, newpte;
+	vm_page_t m;
+
+ retry:
+	pte = pmap_pte(pmap, va);
+	if (pte == NULL || (*pte & PG_V) == 0) {
+		printf("%s(%p, %#lx, %#x) bad mapping\n", __func__, pmap, va, flags);
+		return (KERN_INVALID_ADDRESS);
+	}
+	origpte = newpte = *pte;
+#ifdef VERBOSE_PMAP
+	printf("%s(%p, %#lx, %#x) (%#lx)\n", __func__, pmap, va, flags, origpte);
+#endif
+	m = PHYS_TO_VM_PAGE(newpte & PG_FRAME);
+
+	if (flags & VM_PROT_READ) {
+		if ((newpte & RPTE_EAA_R) == 0) {
+			return (KERN_PROTECTION_FAILURE);
+		}
+		newpte |= PG_A;
+		vm_page_aflag_set(m, PGA_REFERENCED);
+	}
+	if (flags & VM_PROT_WRITE) {
+		if ((newpte & RPTE_EAA_W) == 0)
+			return (KERN_PROTECTION_FAILURE);
+		newpte |= PG_M;
+		vm_page_dirty(m);
+	}
+	if (!atomic_cmpset_long(pte, origpte, newpte))
+		goto retry;
+
+	return (0);
+}
+
 /*
  * Returns TRUE if the given page is mapped individually or as part of
  * a 2mpage.  Otherwise, returns FALSE.
@@ -682,33 +717,40 @@ pmap_cache_bits(vm_memattr_t ma)
 static void
 pmap_invalidate_page(pmap_t pmap, vm_offset_t start)
 {
+	ptesync();
 	if (pmap == kernel_pmap)
 		radix_tlbie_invlpg_kernel_4k(start);
 	else
 		radix_tlbie_invlpg_user_4k(pmap->pm_pid, start);
+	ttusync();
 }
 
 static void
 pmap_invalidate_page_2m(pmap_t pmap, vm_offset_t start)
 {
+	ptesync();
 	if (pmap == kernel_pmap)
 		radix_tlbie_invlpg_kernel_2m(start);
 	else
 		radix_tlbie_invlpg_user_2m(pmap->pm_pid, start);
+	ttusync();
 }
 
 static void
 pmap_invalidate_pwc(pmap_t pmap)
 {
+	ptesync();
 	if (pmap == kernel_pmap)
 		radix_tlbie_invlpwc_kernel();
 	else
 		radix_tlbie_invlpwc_user(pmap->pm_pid);
+	ttusync();
 }
 
 static void
 pmap_invalidate_range(pmap_t pmap, vm_offset_t start, vm_offset_t end)
 {
+	ptesync();
 	if (pmap == kernel_pmap) {
 		while (start < end) {
 			radix_tlbie_invlpg_kernel_4k(start);
@@ -720,15 +762,18 @@ pmap_invalidate_range(pmap_t pmap, vm_offset_t start, vm_offset_t end)
 			start += PAGE_SIZE;
 		}
 	}
+	ttusync();
 }
 
 static void
 pmap_invalidate_all(pmap_t pmap)
 {
+	ptesync();
 	if (pmap == kernel_pmap)
 		radix_tlbie_flush_kernel();
 	else
 		radix_tlbie_flush_user(pmap->pm_pid);
+	ttusync();
 }
 
 static void
@@ -746,6 +791,7 @@ pmap_invalidate_l3e_page(pmap_t pmap, vm_offset_t va, pml3_entry_t l3e)
 	 * single INVLPG suffices to invalidate the 2MB page mapping from the
 	 * TLB.
 	 */
+	ptesync();
 	if ((l3e & PG_PROMOTED) != 0) {
 		pmap_invalidate_range(pmap, va, va + L3_PAGE_SIZE - 1);
 	} else
@@ -1928,10 +1974,8 @@ maybe_invlrng:
 		if (va != va_next)
 			pmap_invalidate_range(pmap, va, sva);
 	}
-	if (anychanged) {
-		ptesync();
+	if (anychanged)
 		pmap_invalidate_all(pmap);
-	}
 	PMAP_UNLOCK(pmap);
 	pmap_delayed_invl_finished(&et);
 }
@@ -2083,7 +2127,6 @@ restart:
 							(oldpte | RPTE_EAA_R) & ~(PG_M | PG_RW)))
 							   oldpte = *pte;
 						vm_page_dirty(m);
-						ptesync();
 						pmap_invalidate_page(pmap, va);
 					}
 				}
@@ -2110,7 +2153,6 @@ restart:
 		pte = pmap_l3e_to_pte(l3e, pv->pv_va);
 		if ((*pte & (PG_M | PG_RW)) == (PG_M | PG_RW)) {
 			atomic_clear_long(pte, PG_M);
-			ptesync();
 			pmap_invalidate_page(pmap, pv->pv_va);
 		}
 		PMAP_UNLOCK(pmap);
@@ -2523,6 +2565,7 @@ retry:
 			   " asid=%lu curpid=%d name=%s origpte0x%lx\n",
 			   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
 			   curproc->p_comm, origpte);		
+		pmap_pte_walk(pmap->pm_pml1, va);
 #endif
 		/*
 		 * Wiring change, just update stats. We don't worry about
@@ -2622,7 +2665,6 @@ retry:
 			printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- asid=%lu curpid=%d name=%s\n",
 				   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
 				   curproc->p_comm);
-			pmap_pte_walk(pmap->pm_pml1, va);
 #endif
 		}
 
@@ -3147,6 +3189,7 @@ METHOD(growkernel) vm_offset_t addr)
 			break;
 		}
 	}
+	ptesync();
 }
 
 static MALLOC_DEFINE(M_RADIX_PGD, "radix_pgd", "radix page table root directory");
@@ -3655,9 +3698,9 @@ mmu_radix_pmap_object_init_pt(pmap_t pmap, vm_offset_t addr, vm_object_t object,
 			}
 			addr += L3_PAGE_SIZE;
 		}
+		ptesync();
 		PMAP_UNLOCK(pmap);
 	}
-	ptesync();
 }
 
 boolean_t
@@ -4098,6 +4141,10 @@ mmu_radix_pmap_protect(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, vm_prot_t 
 	    (VM_PROT_WRITE|VM_PROT_EXECUTE))
 		return;
 
+#ifdef VERBOSE_PROTECT
+	printf("pmap_protect(%p, %#lx, %#lx, %x) - asid: %lu\n",
+		   pmap, sva, eva, prot, pmap->pm_pid);
+#endif
 	anychanged = FALSE;
 
 	/*
@@ -4200,7 +4247,12 @@ retry:
 			if (pbits != obits) {
 				if (!atomic_cmpset_long(pte, obits, pbits))
 					goto retry;
-				anychanged = TRUE;
+				if (obits & (PG_A|PG_M)) {
+#ifdef VERBOSE_PROTECT
+					printf("%#lx %#lx -> %#lx\n", sva, obits, pbits);
+#endif
+					anychanged = TRUE;
+				}
 			}
 		}
 	}
@@ -4232,10 +4284,11 @@ mmu_radix_pmap_qenter(vm_offset_t sva, vm_page_t *ma, int count)
 		}
 		pte++;
 	}
-	ptesync();
 	if (__predict_false((oldpte & RPTE_VALID) != 0))
 		pmap_invalidate_range(kernel_pmap, sva, sva + count *
 		    PAGE_SIZE);
+	else
+		ptesync();
 }
 
 void
@@ -4251,7 +4304,6 @@ mmu_radix_pmap_qremove(vm_offset_t sva, int count)
 		pmap_kremove(va);
 		va += PAGE_SIZE;
 	}
-	ptesync();
 	pmap_invalidate_range(kernel_pmap, sva, va);
 }
 
@@ -5777,5 +5829,6 @@ DB_SHOW_COMMAND(pte, pmap_print_pte)
 
 	pmap_pte_walk(pmap->pm_pml1, va);
 }
+
 #endif
 

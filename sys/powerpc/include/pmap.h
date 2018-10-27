@@ -336,6 +336,7 @@ vm_paddr_t	pmap_kextract(vm_offset_t);
 int		pmap_dev_direct_mapped(vm_paddr_t, vm_size_t);
 boolean_t	pmap_mmu_install(char *name, int prio);
 bool		pmap_ps_enabled(pmap_t pmap);
+int		pmap_nofault(pmap_t pmap, vm_offset_t va, vm_prot_t flags);
 
 #define	vtophys(va)	pmap_kextract((vm_offset_t)(va))
 
