@@ -111,6 +111,13 @@ static int pg_ps_enabled = 0;
 #endif
 SYSCTL_INT(_vm_pmap, OID_AUTO, pg_ps_enabled, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
     &pg_ps_enabled, 0, "Are large page mappings enabled?");
+#ifdef INVARIANTS
+#define VERBOSE_PMAP 0
+#define VERBOSE_PROTECT 0
+static int pmap_logging;
+SYSCTL_INT(_vm_pmap, OID_AUTO, pmap_logging, CTLFLAG_RWTUN,
+    &pmap_logging, 0, "verbose debug logging");
+#endif
 
 static u_int64_t	KPTphys;	/* phys addr of kernel level 1 */
 
@@ -280,7 +287,8 @@ static void _pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m,
 static boolean_t pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m, struct spglist *free);
 
 static void mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma);
-
+static void pmap_invalidate_page(pmap_t pmap, vm_offset_t start);
+static void pmap_invalidate_all(pmap_t pmap);
 /*
  * Internal flags for pmap_enter()'s helper functions.
  */
@@ -640,50 +648,68 @@ pmap_nofault(pmap_t pmap, vm_offset_t va, vm_prot_t flags)
 	pt_entry_t *pte;
 	pt_entry_t startpte, origpte, newpte;
 	vm_page_t m;
-	int rv;
 
-	rv = startpte = 0;
-	PMAP_LOCK(pmap);
+	startpte = 0;
+	va = va & PG_FRAME;
  retry:
+	/*
+	 * XXX this will need to change for superpages
+	 */
 	pte = pmap_pte(pmap, va);
-	if (pte == NULL || (*pte & PG_V) == 0) {
-		rv = KERN_INVALID_ADDRESS;
-		goto out;
-	}
+	if (pte == NULL || (*pte & PG_V) == 0)
+		return (KERN_INVALID_ADDRESS);
 	origpte = newpte = *pte;
-	if (startpte == 0)
+	if (startpte == 0) {
 		startpte = origpte;
-#ifdef VERBOSE_PMAP
-	printf("%s(%p, %#lx, %#x) (%#lx)\n", __func__, pmap, va, flags, origpte);
+		if (((flags & VM_PROT_WRITE) && (startpte & PG_M)) ||
+			((flags & VM_PROT_READ) && (startpte & PG_A))) {
+			pmap_invalidate_all(pmap);
+#ifdef INVARIANTS
+			if (VERBOSE_PMAP || pmap_logging)
+				printf("%s(%p, %#lx, %#x) (%#lx) -- invalidate all\n", __func__, pmap, va, flags, origpte);
 #endif
+			return (KERN_FAILURE);
+		}
+	}
+#ifdef INVARIANTS
+	if (VERBOSE_PMAP || pmap_logging)
+		printf("%s(%p, %#lx, %#x) (%#lx)\n", __func__, pmap, va, flags, origpte);
+#endif
+	PMAP_LOCK(pmap);
+	pte = pmap_pte(pmap, va);
+	if (pte == NULL || *pte != origpte) {
+		PMAP_UNLOCK(pmap);
+		return (KERN_FAILURE);
+	}
 	m = PHYS_TO_VM_PAGE(newpte & PG_FRAME);
+	switch (flags) {
+		case VM_PROT_READ:
+			if ((newpte & (RPTE_EAA_R|RPTE_EAA_X)) == 0)
+				goto protfail;
+			newpte |= PG_A;
+			vm_page_aflag_set(m, PGA_REFERENCED);
+			break;
+		case VM_PROT_WRITE:
+			if ((newpte & RPTE_EAA_W) == 0)
+				goto protfail;
+			newpte |= PG_M;
+			vm_page_dirty(m);
+			break;
+		case VM_PROT_EXECUTE:
+			if ((newpte & RPTE_EAA_X) == 0)
+				goto protfail;
+			newpte |= PG_A;
+			vm_page_aflag_set(m, PGA_REFERENCED);
+			break;
+	}
 
-	if (flags & VM_PROT_READ) {
-		if ((newpte & RPTE_EAA_R) == 0)
-			goto protfail;
-		newpte |= PG_A;
-		vm_page_aflag_set(m, PGA_REFERENCED);
-	}
-	if (flags & VM_PROT_EXECUTE) {
-		if ((newpte & RPTE_EAA_X) == 0)
-			goto protfail;
-		newpte |= PG_A;
-		vm_page_aflag_set(m, PGA_REFERENCED);
-	}
-	if (flags & VM_PROT_WRITE) {
-		if ((newpte & RPTE_EAA_W) == 0)
-			goto protfail;
-		newpte |= PG_M;
-		vm_page_dirty(m);
-	}
-	if (startpte == newpte)
-		rv = KERN_FAILURE;
-	else if (!atomic_cmpset_long(pte, origpte, newpte))
+	if (!atomic_cmpset_long(pte, origpte, newpte))
 		goto retry;
-
- out:
+	ptesync();
 	PMAP_UNLOCK(pmap);
-	return (rv);
+	if (startpte == newpte)
+		return (KERN_FAILURE);
+	return (0);
  protfail:
 	PMAP_UNLOCK(pmap);
 	return (KERN_PROTECTION_FAILURE);
@@ -2198,9 +2224,10 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 
 	if (dst_addr != src_addr)
 		return;
-#ifdef VERBOSE_PMAP
-	printf("%s(dst_pmap=%p, src_pmap=%p, dst_addr=%lx, len=%lu, src_addr=%lx)\n",
-		   __func__, dst_pmap, src_pmap, dst_addr, len, src_addr);
+#ifdef INVARIANTS
+	if (VERBOSE_PMAP || pmap_logging)
+		printf("%s(dst_pmap=%p, src_pmap=%p, dst_addr=%lx, len=%lu, src_addr=%lx)\n",
+		    __func__, dst_pmap, src_pmap, dst_addr, len, src_addr);
 #endif
 	lock = NULL;
 	invalidate_pwc = false;
@@ -2578,12 +2605,14 @@ retry:
 	 * Is the specified virtual address already mapped?
 	 */
 	if ((origpte & PG_V) != 0) {
-#ifdef VERBOSE_PMAP
-		printf("cow fault pmap_enter(%p, %#lx, %p, %#x, %x, %d) --"
-			   " asid=%lu curpid=%d name=%s origpte0x%lx\n",
-			   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
-			   curproc->p_comm, origpte);		
-		pmap_pte_walk(pmap->pm_pml1, va);
+#ifdef INVARIANTS
+		if (VERBOSE_PMAP || pmap_logging) {
+			printf("cow fault pmap_enter(%p, %#lx, %p, %#x, %x, %d) --"
+				   " asid=%lu curpid=%d name=%s origpte0x%lx\n",
+				   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
+				   curproc->p_comm, origpte);
+			pmap_pte_walk(pmap->pm_pml1, va);
+		}
 #endif
 		/*
 		 * Wiring change, just update stats. We don't worry about
@@ -2625,8 +2654,11 @@ retry:
 						vm_page_dirty(m);
 					if ((newpte & PG_A) != (origpte & PG_A))
 						vm_page_aflag_set(m, PGA_REFERENCED);
-				}
-				goto unchanged;
+					ptesync();
+				} else
+					pmap_invalidate_page(pmap, va);
+				if (((origpte ^ newpte) & ~(PG_M | PG_A)) == 0)
+					goto unchanged;
 			}
 			goto validate;
 		}
@@ -2679,10 +2711,11 @@ retry:
 		origpte = 0;
 	} else {
 		if (pmap != kernel_pmap) {
-#ifdef VERBOSE_PMAP
-			printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- asid=%lu curpid=%d name=%s\n",
-				   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
-				   curproc->p_comm);
+#ifdef INVARIANTS
+			if (VERBOSE_PMAP || pmap_logging)
+				printf("pmap_enter(%p, %#lx, %p, %#x, %x, %d) -- asid=%lu curpid=%d name=%s\n",
+					   pmap, va, m, prot, flags, psind, pmap->pm_pid, curproc->p_pid,
+					   curproc->p_comm);
 #endif
 		}
 
@@ -2734,9 +2767,9 @@ validate:
 			 */
 		} else if ((origpte & PG_X) != 0 || (newpte & PG_X) == 0) {
 			/*
-			 * This PTE change does not require TLB invalidation.
-			 * XXX true on POWER?
+			 * Removing capabilities requires invalidation on POWER
 			 */
+			pmap_invalidate_page(pmap, va);
 			goto unchanged;
 		}
 		if ((origpte & PG_A) != 0)
@@ -4159,9 +4192,10 @@ mmu_radix_pmap_protect(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, vm_prot_t 
 	    (VM_PROT_WRITE|VM_PROT_EXECUTE))
 		return;
 
-#ifdef VERBOSE_PROTECT
-	printf("pmap_protect(%p, %#lx, %#lx, %x) - asid: %lu\n",
-		   pmap, sva, eva, prot, pmap->pm_pid);
+#ifdef INVARIANTS
+	if (VERBOSE_PROTECT || pmap_logging)
+		printf("pmap_protect(%p, %#lx, %#lx, %x) - asid: %lu\n",
+			   pmap, sva, eva, prot, pmap->pm_pid);
 #endif
 	anychanged = FALSE;
 
@@ -4266,8 +4300,9 @@ retry:
 				if (!atomic_cmpset_long(pte, obits, pbits))
 					goto retry;
 				if (obits & (PG_A|PG_M)) {
-#ifdef VERBOSE_PROTECT
-					printf("%#lx %#lx -> %#lx\n", sva, obits, pbits);
+#ifdef INVARIANTS
+					if (VERBOSE_PROTECT || pmap_logging)
+						printf("%#lx %#lx -> %#lx\n", sva, obits, pbits);
 #endif
 					anychanged = TRUE;
 				}
@@ -5467,8 +5502,9 @@ mmu_radix_pmap_activate(struct thread *td)
 			curpid != pmap->pm_pid) {
 			mmu_radix_pid_set(pmap);
 			PCPU_SET(asid, pmap->pm_pid);
-#ifdef VERBOSE_PMAP
-			printf("activated pid=%lu\n", pmap->pm_pid);
+#ifdef INVARIANTS
+			if (VERBOSE_PMAP || pmap_logging)
+				printf("activated pid=%lu\n", pmap->pm_pid);
 #endif			
 		}
 	}
