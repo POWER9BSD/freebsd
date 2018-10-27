@@ -638,38 +638,55 @@ int
 pmap_nofault(pmap_t pmap, vm_offset_t va, vm_prot_t flags)
 {
 	pt_entry_t *pte;
-	pt_entry_t origpte, newpte;
+	pt_entry_t startpte, origpte, newpte;
 	vm_page_t m;
+	int rv;
 
+	rv = startpte = 0;
+	PMAP_LOCK(pmap);
  retry:
 	pte = pmap_pte(pmap, va);
 	if (pte == NULL || (*pte & PG_V) == 0) {
-		printf("%s(%p, %#lx, %#x) bad mapping\n", __func__, pmap, va, flags);
-		return (KERN_INVALID_ADDRESS);
+		rv = KERN_INVALID_ADDRESS;
+		goto out;
 	}
 	origpte = newpte = *pte;
+	if (startpte == 0)
+		startpte = origpte;
 #ifdef VERBOSE_PMAP
 	printf("%s(%p, %#lx, %#x) (%#lx)\n", __func__, pmap, va, flags, origpte);
 #endif
 	m = PHYS_TO_VM_PAGE(newpte & PG_FRAME);
 
 	if (flags & VM_PROT_READ) {
-		if ((newpte & RPTE_EAA_R) == 0) {
-			return (KERN_PROTECTION_FAILURE);
-		}
+		if ((newpte & RPTE_EAA_R) == 0)
+			goto protfail;
+		newpte |= PG_A;
+		vm_page_aflag_set(m, PGA_REFERENCED);
+	}
+	if (flags & VM_PROT_EXECUTE) {
+		if ((newpte & RPTE_EAA_X) == 0)
+			goto protfail;
 		newpte |= PG_A;
 		vm_page_aflag_set(m, PGA_REFERENCED);
 	}
 	if (flags & VM_PROT_WRITE) {
 		if ((newpte & RPTE_EAA_W) == 0)
-			return (KERN_PROTECTION_FAILURE);
+			goto protfail;
 		newpte |= PG_M;
 		vm_page_dirty(m);
 	}
-	if (!atomic_cmpset_long(pte, origpte, newpte))
+	if (startpte == newpte)
+		rv = KERN_FAILURE;
+	else if (!atomic_cmpset_long(pte, origpte, newpte))
 		goto retry;
 
-	return (0);
+ out:
+	PMAP_UNLOCK(pmap);
+	return (rv);
+ protfail:
+	PMAP_UNLOCK(pmap);
+	return (KERN_PROTECTION_FAILURE);
 }
 
 /*
