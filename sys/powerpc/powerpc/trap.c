@@ -558,6 +558,7 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 
 #ifdef __powerpc64__
 extern int copy_fault(void);
+extern int copyinstr_fault(void);
 extern int fusufault(void);
 #endif
 
@@ -577,10 +578,13 @@ handle_onfault(struct trapframe *frame)
 		if (__predict_true(dispatch == 0))
 			return (0);
 		switch (dispatch) {
-			case 1:
+			case COPYFAULT:
 				frame->srr0 = (uintptr_t)copy_fault;
 				break;
-			case 2:
+			case COPYINSTRFAULT:
+				frame->srr0 = (uintptr_t)copyinstr_fault;
+				break;
+			case FUSUFAULT:
 				frame->srr0 = (uintptr_t)fusufault;
 				break;
 			default:
