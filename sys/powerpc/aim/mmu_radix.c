@@ -343,6 +343,7 @@ enum {
 static int pmap_initialized;
 static vm_paddr_t proctab0pa;
 static vm_paddr_t parttab_phys;
+CTASSERT(sizeof(struct pv_chunk) == PAGE_SIZE);
 
 /*
  * Data for the pv entry allocation mechanism.
