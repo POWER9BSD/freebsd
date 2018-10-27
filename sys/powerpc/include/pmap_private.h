@@ -127,7 +127,6 @@ radix_tlbie(uint8_t ric, uint8_t prs, uint16_t is, uint32_t pid, uint32_t lpid,
 	rb = va | is | ap;
 	__asm __volatile(PPC_TLBIE_5(%0, %1, %2, %3, 1) : :
 		"r" (rb), "r" (rs), "i" (ric), "i" (prs));
-	ttusync();
 }
 
 static __inline void
@@ -162,45 +161,44 @@ radix_tlbie_flush_user(uint32_t pid)
 		TLBIEL_INVAL_SET_PID, pid, 0, 0, 0);
 }
 
-
 static __inline void
 radix_tlbie_invlpg_kernel_4k(vm_offset_t va)
 {
 
-	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PARTITION_SCOPE,
-				TLBIEL_INVAL_PAGE, 1, 0, va, TLBIE_ACTUAL_PAGE_4K);
+	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PROCESS_SCOPE,
+				TLBIEL_INVAL_PAGE, 0, 0, va, TLBIE_ACTUAL_PAGE_4K);
 }
 
 static __inline void
 radix_tlbie_invlpg_kernel_2m(vm_offset_t va)
 {
 
-	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PARTITION_SCOPE,
-				TLBIEL_INVAL_PAGE, 1, 0, va, TLBIE_ACTUAL_PAGE_2M);
+	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PROCESS_SCOPE,
+				TLBIEL_INVAL_PAGE, 0, 0, va, TLBIE_ACTUAL_PAGE_2M);
 }
 
 static __inline void
 radix_tlbie_invlpg_kernel_1g(vm_offset_t va)
 {
 
-	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PARTITION_SCOPE,
-				TLBIEL_INVAL_PAGE, 1, 0, va, TLBIE_ACTUAL_PAGE_1G);
+	radix_tlbie(TLBIE_RIC_INVALIDATE_TLB, TLBIE_PRS_PROCESS_SCOPE,
+				TLBIEL_INVAL_PAGE, 0, 0, va, TLBIE_ACTUAL_PAGE_1G);
 }
 
 static __inline void
 radix_tlbie_invlpwc_kernel(void)
 {
 
-	radix_tlbie(TLBIE_RIC_INVALIDATE_PWC, TLBIE_PRS_PARTITION_SCOPE,
-		TLBIEL_INVAL_SET_LPID, 1, 0, 0, 0);
+	radix_tlbie(TLBIE_RIC_INVALIDATE_PWC, TLBIE_PRS_PROCESS_SCOPE,
+		TLBIEL_INVAL_SET_LPID, 0, 0, 0, 0);
 }
 
 static __inline void
 radix_tlbie_flush_kernel(void)
 {
 
-	radix_tlbie(TLBIE_RIC_INVALIDATE_ALL, TLBIE_PRS_PARTITION_SCOPE,
-		TLBIEL_INVAL_SET_LPID, 1, 0, 0, 0);
+	radix_tlbie(TLBIE_RIC_INVALIDATE_ALL, TLBIE_PRS_PROCESS_SCOPE,
+		TLBIEL_INVAL_SET_LPID, 0, 0, 0, 0);
 }
 
 static __inline vm_pindex_t
