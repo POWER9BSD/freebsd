@@ -2298,6 +2298,9 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 		if (va_next > end_addr)
 			va_next = end_addr;
 
+		/*
+		 * XXX pte iteration may depend on recursive mappings
+		 */
 		src_pte = (pt_entry_t *)PHYS_TO_DMAP(srcptepaddr);
 		src_pte = &src_pte[pmap_pte_index(addr)];
 		dstmpte = NULL;
@@ -4319,15 +4322,21 @@ mmu_radix_pmap_qenter(vm_offset_t sva, vm_page_t *ma, int count)
 {
 
 	CTR4(KTR_PMAP, "%s(%#x, %p, %d)", __func__, sva, m, count);
-	pt_entry_t *endpte, oldpte, pa, *pte;
+	pt_entry_t oldpte, pa, *pte;
 	vm_page_t m;
 	uint64_t cache_bits, attr_bits;
+	vm_offset_t va;
 
 	oldpte = 0;
-	pte = kvtopte(sva);
-	endpte = pte + count;
-	attr_bits = RPTE_VALID | RPTE_LEAF | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
-	while (pte < endpte) {
+	attr_bits = RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
+	va = sva;
+	while (va < sva + PAGE_SIZE*count) {
+		/*
+		 * XXX there has to be a more efficient way than traversing
+		 * the page table every time - but go for correctness for
+		 * today
+		 */
+		pte = kvtopte(va);
 		m = *ma++;
 		cache_bits = pmap_cache_bits(m->md.mdpg_cache_attrs);
 		pa = VM_PAGE_TO_PHYS(m) | cache_bits | attr_bits;
@@ -4335,7 +4344,7 @@ mmu_radix_pmap_qenter(vm_offset_t sva, vm_page_t *ma, int count)
 			oldpte |= *pte;
 			pte_store(pte, pa);
 		}
-		pte++;
+		va += PAGE_SIZE;
 	}
 	if (__predict_false((oldpte & RPTE_VALID) != 0))
 		pmap_invalidate_range(kernel_pmap, sva, sva + count *
