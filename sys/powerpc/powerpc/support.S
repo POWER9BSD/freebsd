@@ -424,6 +424,11 @@ ENTRY_RADIX(fueword64)
 	EPILOGUE
 #endif
 
+/*
+ * casueword(volatile u_long *base, u_long oldval, u_long *oldvalp, u_long newval)
+ *			      %r3          %r4             %r5             %r6 
+ */
+
 .macro CASUEWORD32 raddr rpcb
 	PROLOGUE
 	SET_FUSUFAULT raddr=\raddr rpcb=\rpcb
@@ -437,6 +442,7 @@ ENTRY_RADIX(fueword64)
 2:
 	stwcx. %r0, 0, %r3       	/* clear reservation (74xx) */
 3:	
+	stw  %r0, 0(%r5)
 	CLEAR_FAULT rpcb=\rpcb clobber=0
 	EPILOGUE	
 .endm
@@ -457,6 +463,7 @@ ENTRY_RADIX(casueword32)
 2:
 	stdcx. %r0, 0, %r3       	/* clear reservation (74xx) */
 3:	
+	std  %r0, 0(%r5)
 	CLEAR_FAULT rpcb=\rpcb clobber=0
 	EPILOGUE
 .endm
