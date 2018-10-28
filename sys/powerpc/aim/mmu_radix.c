@@ -2221,9 +2221,6 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 	vm_page_t dst_pdpg, dstmpte, srcmpte;
 	bool invalidate_all;
 
-#ifndef FULL_FEATURED
-	return;
-#endif
 	CTR6(KTR_PMAP, "%s(%p, %p, %#x, %#x, %#x)", __func__, dst_pmap,
 	    src_pmap, dst_addr, len, src_addr);
 
@@ -2303,9 +2300,6 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 		if (va_next > end_addr)
 			va_next = end_addr;
 
-		/*
-		 * XXX pte iteration may depend on recursive mappings
-		 */
 		src_pte = (pt_entry_t *)PHYS_TO_DMAP(srcptepaddr);
 		src_pte = &src_pte[pmap_pte_index(addr)];
 		dstmpte = NULL;
@@ -3503,9 +3497,6 @@ mmu_radix_pmap_is_prefaultable(pmap_t pmap, vm_offset_t addr)
 	pt_entry_t *pte;
 	boolean_t rv;
 
-#ifndef FULL_FEATURED
-	return (FALSE);
-#endif
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, pmap, addr);
 	rv = FALSE;
 	PMAP_LOCK(pmap);
