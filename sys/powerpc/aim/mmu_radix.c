@@ -253,7 +253,7 @@ static int pmap_remove_l3e(pmap_t pmap, pml3_entry_t *pdq, vm_offset_t sva,
 static int pmap_remove_pte(pmap_t pmap, pt_entry_t *ptq, vm_offset_t sva,
     pml3_entry_t ptepde, struct spglist *free, struct rwlock **lockp);
 static vm_page_t pmap_remove_pt_page(pmap_t pmap, vm_offset_t va);
-static void pmap_remove_page(pmap_t pmap, vm_offset_t va, pml3_entry_t *pde,
+static bool pmap_remove_page(pmap_t pmap, vm_offset_t va, pml3_entry_t *pde,
     struct spglist *free);
 static bool	pmap_remove_ptes(pmap_t pmap, vm_offset_t sva, vm_offset_t eva,
 	pml3_entry_t *l3e, struct spglist *free, struct rwlock **lockp);
@@ -793,6 +793,10 @@ pmap_invalidate_pwc(pmap_t pmap)
 static void
 pmap_invalidate_range(pmap_t pmap, vm_offset_t start, vm_offset_t end)
 {
+	if (((start - end) >> PAGE_SHIFT) > 8) {
+		pmap_invalidate_all(pmap);
+		return;
+	}
 	ptesync();
 	if (pmap == kernel_pmap) {
 		while (start < end) {
@@ -2012,12 +2016,12 @@ mmu_radix_pmap_advise(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, int advice)
 			continue;
 maybe_invlrng:
 			if (va != va_next) {
-				pmap_invalidate_range(pmap, va, sva);
+				anychanged = true;
 				va = va_next;
 			}
 		}
 		if (va != va_next)
-			pmap_invalidate_range(pmap, va, sva);
+			anychanged = true;
 	}
 	if (anychanged)
 		pmap_invalidate_all(pmap);
@@ -2215,7 +2219,7 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 	vm_offset_t end_addr = src_addr + len;
 	vm_offset_t va_next;
 	vm_page_t dst_pdpg, dstmpte, srcmpte;
-	bool invalidate_pwc;
+	bool invalidate_all;
 
 #ifndef FULL_FEATURED
 	return;
@@ -2231,7 +2235,7 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 		    __func__, dst_pmap, src_pmap, dst_addr, len, src_addr);
 #endif
 	lock = NULL;
-	invalidate_pwc = false;
+	invalidate_all = false;
 	if (dst_pmap < src_pmap) {
 		PMAP_LOCK(dst_pmap);
 		PMAP_LOCK(src_pmap);
@@ -2345,7 +2349,7 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 						 * the freed page table pages.
 						 * Invalidate those entries.
 						 */
-						invalidate_pwc = true;
+						invalidate_all = true;
 						vm_page_free_pages_toq(&free,
 						    true);
 					}
@@ -2356,14 +2360,14 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 			}
 			addr += PAGE_SIZE;
 			if (__predict_false((addr & L3_PAGE_MASK) == 0))
-				src_pte = pmap_pte(addr);
+				src_pte = pmap_pte(src_pmap, addr);
 			else
 				src_pte++;
 		}
 	}
 out:
-	if (invalidate_pwc)
-		pmap_invalidate_pwc(dst_pmap);
+	if (invalidate_all)
+		pmap_invalidate_all(dst_pmap);
 	if (lock != NULL)
 		rw_wunlock(lock);
 	PMAP_UNLOCK(src_pmap);
@@ -2518,10 +2522,11 @@ mmu_radix_pmap_enter(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
 	vm_paddr_t opa, pa;
 	vm_page_t mpte, om;
 	int rv, retrycount;
-	boolean_t nosleep;
+	boolean_t nosleep, invalidate_all, invalidate_page;
 
 	va = trunc_page(va);
 	retrycount = 0;
+	invalidate_page = invalidate_all = false;
 	CTR6(KTR_PMAP, "pmap_enter(%p, %#lx, %p, %#x, %#x, %d)", pmap, va,
 	    m, prot, flags, psind);
 	KASSERT(va <= VM_MAX_KERNEL_ADDRESS, ("pmap_enter: toobig"));
@@ -2601,6 +2606,7 @@ retry:
 		}
 		if (__predict_false(retrycount++ == 6))
 			panic("too many retries");
+		invalidate_all = true;
 		goto retry;
 	} else
 		panic("pmap_enter: invalid page directory va=%#lx", va);
@@ -2663,7 +2669,7 @@ retry:
 						vm_page_aflag_set(m, PGA_REFERENCED);
 					ptesync();
 				} else
-					pmap_invalidate_page(pmap, va);
+					invalidate_all = true;
 				if (((origpte ^ newpte) & ~(PG_M | PG_A)) == 0)
 					goto unchanged;
 			}
@@ -2714,7 +2720,7 @@ retry:
 				vm_page_aflag_clear(om, PGA_WRITEABLE);
 		}
 		if ((origpte & PG_A) != 0)
-			pmap_invalidate_page(pmap, va);
+			invalidate_page = true;
 		origpte = 0;
 	} else {
 		if (pmap != kernel_pmap) {
@@ -2766,6 +2772,7 @@ validate:
 		    (PG_M | PG_RW)) {
 			if ((origpte & PG_MANAGED) != 0)
 				vm_page_dirty(m);
+			invalidate_page = true;
 
 			/*
 			 * Although the PTE may still have PG_RW set, TLB
@@ -2776,16 +2783,20 @@ validate:
 			/*
 			 * Removing capabilities requires invalidation on POWER
 			 */
-			pmap_invalidate_page(pmap, va);
+			invalidate_page = true;
 			goto unchanged;
 		}
 		if ((origpte & PG_A) != 0)
-			pmap_invalidate_page(pmap, va);
+			invalidate_page = true;
 	} else {
 		pte_store(pte, newpte);
 		ptesync();
 	}
 unchanged:
+	if (invalidate_all)
+		pmap_invalidate_all(pmap);
+	else if (invalidate_page)
+		pmap_invalidate_page(pmap, va);
 
 #if VM_NRESERVLEVEL > 0
 	/*
@@ -3807,7 +3818,7 @@ mmu_radix_pmap_page_exists_quick(pmap_t pmap, vm_page_t m)
 		}
 	}
 	rw_runlock(lock);
-	return (0);
+	return (rv);
 }
 
 void
@@ -4315,11 +4326,11 @@ retry:
 				if (!atomic_cmpset_long(pte, obits, pbits))
 					goto retry;
 				if (obits & (PG_A|PG_M)) {
+					anychanged = TRUE;
 #ifdef INVARIANTS
 					if (VERBOSE_PROTECT || pmap_logging)
 						printf("%#lx %#lx -> %#lx\n", sva, obits, pbits);
 #endif
-					anychanged = TRUE;
 				}
 			}
 		}
@@ -4375,13 +4386,18 @@ void
 mmu_radix_pmap_qremove(vm_offset_t sva, int count)
 {
 	vm_offset_t va;
+	pt_entry_t *pte;
 
 	CTR3(KTR_PMAP, "%s(%#x, %d)", __func__, sva, count);
+	KASSERT(sva >= VM_MIN_KERNEL_ADDRESS, ("usermode or dmap va %lx", sva));
 
 	va = sva;
-	while (count-- > 0) {
-		KASSERT(va >= VM_MIN_KERNEL_ADDRESS, ("usermode or dmap va %lx", va));
-		pmap_kremove(va);
+	pte = kvtopte(va);
+	while (va < sva + PAGE_SIZE*count) {
+		if (__predict_false((va & L3_PAGE_MASK) == 0))
+			pte = kvtopte(va);
+		pte_clear(pte);
+		pte++;
 		va += PAGE_SIZE;
 	}
 	pmap_invalidate_range(kernel_pmap, sva, va);
@@ -4816,27 +4832,30 @@ pmap_remove_pte(pmap_t pmap, pt_entry_t *ptq, vm_offset_t va,
 /*
  * Remove a single page from a process address space
  */
-static void
+static bool
 pmap_remove_page(pmap_t pmap, vm_offset_t va, pml3_entry_t *l3e,
     struct spglist *free)
 {
 	struct rwlock *lock;
 	pt_entry_t *pte;
+	bool invalidate_all;
 
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
 	if ((*l3e & RPTE_VALID) == 0) {
-		return;
+		return (false);
 	}
 	pte = pmap_l3e_to_pte(l3e, va);
 	if ((*pte & RPTE_VALID) == 0) {
-		return;
+		return (false);
 	}
 	lock = NULL;
 
-	pmap_remove_pte(pmap, pte, va, *l3e, free, &lock);
+	invalidate_all = pmap_remove_pte(pmap, pte, va, *l3e, free, &lock);
 	if (lock != NULL)
 		rw_wunlock(lock);
-	pmap_invalidate_page(pmap, va);
+	if (!invalidate_all)
+		pmap_invalidate_page(pmap, va);
+	return (invalidate_all);
 }
 
 /*
@@ -4858,7 +4877,7 @@ pmap_remove_ptes(pmap_t pmap, vm_offset_t sva, vm_offset_t eva,
 		MPASS(pte == pmap_pte(pmap, sva));
 		if (*pte == 0) {
 			if (va != eva) {
-				pmap_invalidate_range(pmap, va, sva);
+				anyvalid = true;
 				va = eva;
 			}
 			continue;
@@ -4866,11 +4885,14 @@ pmap_remove_ptes(pmap_t pmap, vm_offset_t sva, vm_offset_t eva,
 		if (va == eva)
 			va = sva;
 		if (pmap_remove_pte(pmap, pte, sva, *l3e, free, lockp)) {
+			anyvalid = true;
 			sva += PAGE_SIZE;
 			break;
 		}
 	}
-	if (va != eva)
+	if (anyvalid)
+		pmap_invalidate_all(pmap);
+	else if (va != eva)
 		pmap_invalidate_range(pmap, va, sva);
 	return (anyvalid);
 }
@@ -4886,7 +4908,7 @@ mmu_radix_pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 	pml3_entry_t ptpaddr, *l3e;
 	struct spglist free;
 	struct epoch_tracker et;
-	int anyvalid;
+	bool anyvalid;
 
 	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, pmap, start, end);
 
@@ -4896,7 +4918,7 @@ mmu_radix_pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 	if (pmap->pm_stats.resident_count == 0)
 		return;
 
-	anyvalid = 0;
+	anyvalid = false;
 	SLIST_INIT(&free);
 
 	/* XXX something fishy here */
@@ -4914,7 +4936,7 @@ mmu_radix_pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 	if (sva + PAGE_SIZE == eva) {
 		l3e = pmap_pml3e(pmap, sva);
 		if (l3e && (*l3e & RPTE_LEAF) == 0) {
-			pmap_remove_page(pmap, sva, l3e, &free);
+			anyvalid = pmap_remove_page(pmap, sva, l3e, &free);
 			goto out;
 		}
 	}
@@ -4984,7 +5006,7 @@ mmu_radix_pmap_remove(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 			va_next = eva;
 
 		if (pmap_remove_ptes(pmap, sva, va_next, l3e, &free, &lock))
-			anyvalid = 1;
+			anyvalid = true;
 	}
 	if (lock != NULL)
 		rw_wunlock(lock);
