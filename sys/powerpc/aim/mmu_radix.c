@@ -256,32 +256,31 @@ static vm_page_t pmap_remove_pt_page(pmap_t pmap, vm_offset_t va);
 static void pmap_remove_page(pmap_t pmap, vm_offset_t va, pml3_entry_t *pde,
     struct spglist *free);
 static bool	pmap_remove_ptes(pmap_t pmap, vm_offset_t sva, vm_offset_t eva,
-		    pml3_entry_t *l3e, struct spglist *free,
-		    struct rwlock **lockp);
+	pml3_entry_t *l3e, struct spglist *free, struct rwlock **lockp);
 
 static bool	pmap_pv_insert_l3e(pmap_t pmap, vm_offset_t va, pml3_entry_t l3e,
 		    u_int flags, struct rwlock **lockp);
 #if VM_NRESERVLEVEL > 0
 static void	pmap_pv_promote_l3e(pmap_t pmap, vm_offset_t va, vm_paddr_t pa,
-		    struct rwlock **lockp);
+	struct rwlock **lockp);
 #endif
 static void	pmap_pvh_free(struct md_page *pvh, pmap_t pmap, vm_offset_t va);
 static int pmap_insert_pt_page(pmap_t pmap, vm_page_t mpte);
 static vm_page_t pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
-	vm_prot_t prot, vm_page_t mpte, struct rwlock **lockp);
+	vm_prot_t prot, vm_page_t mpte, struct rwlock **lockp, bool *invalidate);
 
 static bool	pmap_enter_2mpage(pmap_t pmap, vm_offset_t va, vm_page_t m,
-		    vm_prot_t prot, struct rwlock **lockp);
+	vm_prot_t prot, struct rwlock **lockp);
 static int	pmap_enter_l3e(pmap_t pmap, vm_offset_t va, pml3_entry_t newpde,
-		    u_int flags, vm_page_t m, struct rwlock **lockp);
+	u_int flags, vm_page_t m, struct rwlock **lockp);
 
 static vm_page_t reclaim_pv_chunk(pmap_t locked_pmap, struct rwlock **lockp);
 static void free_pv_chunk(struct pv_chunk *pc);
 static vm_page_t _pmap_allocpte(pmap_t pmap, vm_pindex_t ptepindex, struct rwlock **lockp);
 static vm_page_t pmap_allocl3e(pmap_t pmap, vm_offset_t va,
-		struct rwlock **lockp);
+	struct rwlock **lockp);
 static vm_page_t pmap_allocpte(pmap_t pmap, vm_offset_t va,
-		struct rwlock **lockp);
+	struct rwlock **lockp);
 static void _pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m,
     struct spglist *free);
 static boolean_t pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m, struct spglist *free);
@@ -1988,8 +1987,10 @@ mmu_radix_pmap_advise(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, int advice)
 		if (va_next > eva)
 			va_next = eva;
 		va = va_next;
-		for (pte = pmap_l3e_to_pte(l3e, sva); sva != va_next; pte++,
-		    sva += PAGE_SIZE) {
+		for (pte = pmap_l3e_to_pte(l3e, sva); sva != va_next;
+			 pte++, sva += PAGE_SIZE) {
+			MPASS(pte == pmap_pte(pmap, sva));
+
 			if ((*pte & (PG_MANAGED | PG_V)) != (PG_MANAGED | PG_V))
 				goto maybe_invlrng;
 			else if ((*pte & (PG_M | PG_RW)) == (PG_M | PG_RW)) {
@@ -2354,7 +2355,10 @@ mmu_radix_pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_addr,
 					break;
 			}
 			addr += PAGE_SIZE;
-			src_pte++;
+			if (__predict_false((addr & L3_PAGE_MASK) == 0))
+				src_pte = pmap_pte(addr);
+			else
+				src_pte++;
 		}
 	}
 out:
@@ -2595,7 +2599,7 @@ retry:
 			rv = KERN_RESOURCE_SHORTAGE;
 			goto out;
 		}
-		if (retrycount++ == 6)
+		if (__predict_false(retrycount++ == 6))
 			panic("too many retries");
 		goto retry;
 	} else
@@ -2965,12 +2969,13 @@ mmu_radix_pmap_enter_object(pmap_t pmap, vm_offset_t start, vm_offset_t end,
 	vm_offset_t va;
 	vm_page_t m, mpte;
 	vm_pindex_t diff, psize;
-
+	bool invalidate;
 	VM_OBJECT_ASSERT_LOCKED(m_start->object);
 
 	CTR6(KTR_PMAP, "%s(%p, %#x, %#x, %p, %#x)", __func__, pmap, start,
 	    end, m_start, prot);
 
+	invalidate = false;
 	psize = atop(end - start);
 	mpte = NULL;
 	m = m_start;
@@ -2984,18 +2989,20 @@ mmu_radix_pmap_enter_object(pmap_t pmap, vm_offset_t start, vm_offset_t end,
 			m = &m[L3_PAGE_SIZE / PAGE_SIZE - 1];
 		else
 			mpte = pmap_enter_quick_locked(pmap, va, m, prot,
-			    mpte, &lock);
+			    mpte, &lock, &invalidate);
 		m = TAILQ_NEXT(m, listq);
 	}
 	ptesync();
 	if (lock != NULL)
 		rw_wunlock(lock);
+	if (invalidate)
+		pmap_invalidate_all(pmap);
 	PMAP_UNLOCK(pmap);
 }
 
 static vm_page_t
 pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
-    vm_prot_t prot, vm_page_t mpte, struct rwlock **lockp)
+    vm_prot_t prot, vm_page_t mpte, struct rwlock **lockp, bool *invalidate)
 {
 	struct spglist free;
 	pt_entry_t *pte;
@@ -3075,7 +3082,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 				 * entries that refer to the freed page table
 				 * pages.  Invalidate those entries.
 				 */
-				pmap_invalidate_page(pmap, va);
+				*invalidate = true;
 				vm_page_free_pages_toq(&free, true);
 			}
 			mpte = NULL;
@@ -3104,13 +3111,17 @@ void
 mmu_radix_pmap_enter_quick(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot)
 {
 	struct rwlock *lock;
+	bool invalidate;
 
 	lock = NULL;
+	invalidate = false;
 	PMAP_LOCK(pmap);
-	(void)pmap_enter_quick_locked(pmap, va, m, prot, NULL, &lock);
+	(void)pmap_enter_quick_locked(pmap, va, m, prot, NULL, &lock, &invalidate);
 	ptesync();
 	if (lock != NULL)
 		rw_wunlock(lock);
+	if (invalidate)
+		pmap_invalidate_all(pmap);
 	PMAP_UNLOCK(pmap);
 }
 
@@ -4283,6 +4294,7 @@ mmu_radix_pmap_protect(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, vm_prot_t 
 			vm_page_t m;
 
 retry:
+			MPASS(pte == pmap_pte(pmap, sva));
 			obits = pbits = *pte;
 			if ((pbits & PG_V) == 0)
 				continue;
@@ -4330,13 +4342,18 @@ mmu_radix_pmap_qenter(vm_offset_t sva, vm_page_t *ma, int count)
 	oldpte = 0;
 	attr_bits = RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
 	va = sva;
+	pte = kvtopte(va);
 	while (va < sva + PAGE_SIZE*count) {
+		if (__predict_false((va & L3_PAGE_MASK) == 0))
+			pte = kvtopte(va);
+		MPASS(pte == pmap_pte(kernel_pmap, va));
+
 		/*
 		 * XXX there has to be a more efficient way than traversing
 		 * the page table every time - but go for correctness for
 		 * today
 		 */
-		pte = kvtopte(va);
+
 		m = *ma++;
 		cache_bits = pmap_cache_bits(m->md.mdpg_cache_attrs);
 		pa = VM_PAGE_TO_PHYS(m) | cache_bits | attr_bits;
@@ -4345,6 +4362,7 @@ mmu_radix_pmap_qenter(vm_offset_t sva, vm_page_t *ma, int count)
 			pte_store(pte, pa);
 		}
 		va += PAGE_SIZE;
+		pte++;
 	}
 	if (__predict_false((oldpte & RPTE_VALID) != 0))
 		pmap_invalidate_range(kernel_pmap, sva, sva + count *
@@ -4837,6 +4855,7 @@ pmap_remove_ptes(pmap_t pmap, vm_offset_t sva, vm_offset_t eva,
 	va = eva;
 	for (pte = pmap_l3e_to_pte(l3e, sva); sva != eva; pte++,
 	    sva += PAGE_SIZE) {
+		MPASS(pte == pmap_pte(pmap, sva));
 		if (*pte == 0) {
 			if (va != eva) {
 				pmap_invalidate_range(pmap, va, sva);
@@ -5405,6 +5424,7 @@ mmu_radix_pmap_unwire(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 			va_next = eva;
 		for (pte = pmap_l3e_to_pte(l3e, sva); sva != va_next; pte++,
 		    sva += PAGE_SIZE) {
+			MPASS(pte == pmap_pte(pmap, sva));
 			if ((*pte & PG_V) == 0)
 				continue;
 			if ((*pte & PG_W) == 0)
