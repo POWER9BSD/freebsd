@@ -895,7 +895,7 @@ trap_pfault(struct trapframe *frame, int user)
 		return (0);
 #ifdef DEBUGGING
 	printf("%s vm_fault=>rv = %d -- unhandled\n", __func__, rv);
-	trap_fatal(frame);
+	printtrap(frame->exc, frame, 0, (frame->srr1 & PSL_PR));
 #endif
 	return ((rv == KERN_PROTECTION_FAILURE) ? SIGBUS : SIGSEGV);
 }
