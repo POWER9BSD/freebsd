@@ -103,10 +103,7 @@ machdep_ap_bootstrap(void)
 	mtx_lock_spin(&ap_boot_mtx);
 	ap_awake++;
 	if (bootverbose)
-		printf("SMP: AP CPU #%d launched\n", PCPU_GET(cpuid));
-	else
-		printf("%s%d%s", ap_awake == 2 ? "Launching APs: " : "",
-		    PCPU_GET(cpuid), ap_awake == mp_ncpus ? "\n" : " ");
+		printf("AP(#%d) ", PCPU_GET(cpuid));
 	mtx_unlock_spin(&ap_boot_mtx);
 
 	while(smp_started == 0) {
@@ -205,10 +202,9 @@ cpu_mp_announce(void)
 		pc = pcpu_find(i);
 		if (pc == NULL)
 			continue;
-		printf("cpu%d: dev=%x", i, (int)pc->pc_hwref);
+		printf("cpu%d: dev=%x ", i, (int)pc->pc_hwref);
 		if (pc->pc_bsp)
-			printf(" (BSP)");
-		printf("\n");
+			printf(" (BSP)\n");
 	}
 }
 
