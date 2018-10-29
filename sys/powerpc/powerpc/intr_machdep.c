@@ -172,7 +172,7 @@ intr_init_sources(void *arg __unused)
 	if (mp_ncpus > 1)
 		nintrcnt += 8 * mp_ncpus;
 #endif
-	intrcnt = mallocarray(nintrcnt, sizeof(u_long), M_INTR, M_WAITOK |
+	intrcnt = mallocarray(nintrcnt, CACHE_LINE_SIZE, M_INTR, M_WAITOK |
 	    M_ZERO);
 	intrnames = mallocarray(nintrcnt, MAXCOMLEN + 1, M_INTR, M_WAITOK |
 	    M_ZERO);
@@ -211,7 +211,7 @@ intrcnt_add(const char *name, u_long **countp)
 	idx = atomic_fetchadd_int(&intrcnt_index, 1);
 	KASSERT(idx < nintrcnt, ("intrcnt_add: Interrupt counter index %d/%d"
 		"reached nintrcnt : %d", intrcnt_index, idx, nintrcnt));
-	*countp = &intrcnt[idx];
+	*countp = &intrcnt[idx*(CACHE_LINE_SIZE/sizeof(u_long))];
 	intrcnt_setname(name, idx);
 }
 
@@ -267,7 +267,7 @@ intr_lookup(u_int irq)
 	if (iscan == NULL && i->vector != -1) {
 		powerpc_intrs[i->vector] = i;
 		i->cntindex = atomic_fetchadd_int(&intrcnt_index, 1);
-		i->cntp = &intrcnt[i->cntindex];
+		i->cntp = &intrcnt[i->cntindex*(CACHE_LINE_SIZE/sizeof(u_long))];
 		sprintf(intrname, "irq%u:", i->irq);
 		intrcnt_setname(intrname, i->cntindex);
 		nvectors++;

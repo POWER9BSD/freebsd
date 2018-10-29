@@ -1462,6 +1462,42 @@ sysctl_intrnames(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_hw, OID_AUTO, intrnames, CTLTYPE_OPAQUE | CTLFLAG_RD,
     NULL, 0, sysctl_intrnames, "", "Interrupt Names");
 
+#ifdef __powerpc__
+static int
+sysctl_intrcnt(SYSCTL_HANDLER_ARGS)
+{
+	u_long *intrcnt_packed;
+	unsigned i;
+	int error;
+
+#ifdef SCTL_MASK32
+	uint32_t *intrcnt32;
+
+	if (req->flags & SCTL_MASK32) {
+		if (!req->oldptr)
+			return (sysctl_handle_opaque(oidp, NULL, sintrcnt / 2, req));
+		intrcnt32 = malloc(sintrcnt / 2, M_TEMP, M_NOWAIT);
+		if (intrcnt32 == NULL)
+			return (ENOMEM);
+		for (i = 0; i < sintrcnt / sizeof (u_long); i++)
+			intrcnt32[i] = intrcnt[i*(CACHE_LINE_SIZE/sizeof(u_long))];
+		error = sysctl_handle_opaque(oidp, intrcnt32, sintrcnt / 2, req);
+		free(intrcnt32, M_TEMP);
+		return (error);
+	}
+#endif
+
+	intrcnt_packed = malloc(sintrcnt, M_TEMP, M_NOWAIT);
+	if (intrcnt_packed == NULL)
+		return (ENOMEM);
+	for (i = 0; i < sintrcnt / sizeof (u_long); i++)
+		intrcnt_packed[i] = intrcnt[i*(CACHE_LINE_SIZE/sizeof(u_long))];
+	error = sysctl_handle_opaque(oidp, intrcnt_packed, sintrcnt, req);
+	free(intrcnt_packed, M_TEMP);
+	return (error);
+}
+#else
+
 static int
 sysctl_intrcnt(SYSCTL_HANDLER_ARGS)
 {
@@ -1485,6 +1521,7 @@ sysctl_intrcnt(SYSCTL_HANDLER_ARGS)
 #endif
 	return (sysctl_handle_opaque(oidp, intrcnt, sintrcnt, req));
 }
+#endif
 
 SYSCTL_PROC(_hw, OID_AUTO, intrcnt, CTLTYPE_OPAQUE | CTLFLAG_RD,
     NULL, 0, sysctl_intrcnt, "", "Interrupt Counts");
