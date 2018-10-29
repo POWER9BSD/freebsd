@@ -303,18 +303,15 @@ decr_get_timecount(struct timecounter *tc)
 void
 DELAY(int n)
 {
-	volatile u_quad_t	tb, ttb;
+	u_quad_t	ttb;
 
 	TSENTER();
-	tb = mftb();
-	ttb = tb + howmany((uint64_t)n * 1000000, ps_per_tick);
-	while (tb < ttb) {
+	ttb = mftb() + howmany((uint64_t)n * 1000000, ps_per_tick);
+	while (mftb() < ttb) {
 		__compiler_membar();
-		__asm __volatile("or 31,31,31"); /* Very Low - 1 fetch every 128 cycles */
-		tb = mftb();
-		__compiler_membar();
+		HMT_very_low(); /* Very Low - 1 fetch every 128 cycles */
 	}
-	__asm __volatile("or 2,2,2"); /* Medium (Normal) priority */
+	HMT_medium(); /* Medium (Normal) priority */
 	TSEXIT();
 }
 
