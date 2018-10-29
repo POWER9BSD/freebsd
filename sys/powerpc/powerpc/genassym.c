@@ -59,7 +59,9 @@
 
 ASSYM(PC_CURTHREAD, offsetof(struct pcpu, pc_curthread));
 ASSYM(PC_CURPCB, offsetof(struct pcpu, pc_curpcb));
+#ifndef __powerpc64__
 ASSYM(PC_CURPMAP, offsetof(struct pcpu, pc_curpmap));
+#endif
 ASSYM(PC_TEMPSAVE, offsetof(struct pcpu, pc_tempsave));
 ASSYM(PC_DISISAVE, offsetof(struct pcpu, pc_disisave));
 ASSYM(PC_DBSAVE, offsetof(struct pcpu, pc_dbsave));
