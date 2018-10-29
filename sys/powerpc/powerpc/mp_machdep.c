@@ -102,7 +102,7 @@ machdep_ap_bootstrap(void)
 	/* Serialize console output and AP count increment */
 	mtx_lock_spin(&ap_boot_mtx);
 	ap_awake++;
-	printf("SMP: AP CPU #%d launched\n", PCPU_GET(cpuid));
+	printf("AP(#%d) ", PCPU_GET(cpuid));
 	mtx_unlock_spin(&ap_boot_mtx);
 
 	while(smp_started == 0) {
@@ -201,10 +201,9 @@ cpu_mp_announce(void)
 		pc = pcpu_find(i);
 		if (pc == NULL)
 			continue;
-		printf("cpu%d: dev=%x", i, (int)pc->pc_hwref);
+		printf("cpu%d: dev=%x ", i, (int)pc->pc_hwref);
 		if (pc->pc_bsp)
-			printf(" (BSP)");
-		printf("\n");
+			printf(" (BSP)\n");
 	}
 }
 
