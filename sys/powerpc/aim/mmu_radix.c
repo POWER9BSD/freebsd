@@ -2061,7 +2061,6 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
 
 	mmu_radix_late_bootstrap(start, end);
-	__pcpu[0].pc_curpmap = kernel_pmap;
 	pmap_bootstrapped = 1;
 	if (bootverbose)
 		printf("%s done\n", __func__);
@@ -4134,7 +4133,6 @@ METHOD(pinit0) pmap_t pmap)
 	PMAP_LOCK_INIT(pmap);
 	pmap->pm_pml1 = kernel_pmap->pm_pml1;
 	pmap->pm_pid = kernel_pmap->pm_pid;
-	PCPU_SET(asid, kernel_pmap->pm_pid);
 
 	pmap->pm_root.rt_root = 0;
 	TAILQ_INIT(&pmap->pm_pvchunk);
@@ -5142,7 +5140,8 @@ mmu_radix_pmap_remove_pages(pmap_t pmap)
 	 * CPU.  Unfortunately, we cannot block another CPU from
 	 * activating the pmap while this function is executing.
 	 */
-	KASSERT(pmap == PCPU_GET(curpmap), ("non-current pmap %p", pmap));
+	KASSERT(pmap->pm_pid == mfspr(SPR_PID),
+		("non-current asid %lu - expected %lu", pmap->pm_pid, mfspr(SPR_PID)));
 
 	lock = NULL;
 
@@ -5528,27 +5527,20 @@ retry:
 void
 mmu_radix_pmap_activate(struct thread *td)
 {
-	pmap_t oldpmap, pmap;
+	pmap_t pmap;
+	uint32_t curpid;
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, td);
 	critical_enter();
-	oldpmap = PCPU_GET(curpmap);
 	pmap = vmspace_pmap(td->td_proc->p_vmspace);
-	if (oldpmap != pmap) {
-		uint32_t curpid;
-
-		curpid = PCPU_GET(asid);
-		PCPU_SET(curpmap, pmap);
-
-		if (pmap->pm_pid > isa3_base_pid &&
-			curpid != pmap->pm_pid) {
-			mmu_radix_pid_set(pmap);
-			PCPU_SET(asid, pmap->pm_pid);
+	curpid = mfspr(SPR_PID);
+	if (pmap->pm_pid > isa3_base_pid &&
+		curpid != pmap->pm_pid) {
 #ifdef INVARIANTS
-			if (VERBOSE_PMAP || pmap_logging)
-				printf("activated pid=%lu\n", pmap->pm_pid);
+		if (VERBOSE_PMAP || pmap_logging)
+			printf("activated pid=%lu\n", pmap->pm_pid);
 #endif			
-		}
+		mmu_radix_pid_set(pmap);
 	}
 	critical_exit();
 }
@@ -5921,7 +5913,7 @@ DB_SHOW_COMMAND(pte, pmap_print_pte)
 	else if (kdb_thread != NULL)
 		pmap = vmspace_pmap(kdb_thread->td_proc->p_vmspace);
 	else
-		pmap = PCPU_GET(curpmap);
+		pmap = vmspace_pmap(curthread->td_proc->p_vmspace);
 
 	pmap_pte_walk(pmap->pm_pml1, va);
 }
