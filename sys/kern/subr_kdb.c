@@ -48,6 +48,9 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/kdb.h>
 #include <machine/pcb.h>
+#ifdef __powerpc__
+#include <machine/interrupt.h>
+#endif
 
 #ifdef SMP
 #include <machine/smp.h>

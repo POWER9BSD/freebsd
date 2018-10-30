@@ -48,6 +48,9 @@
 #include <sys/pmc.h>
 
 #include <machine/cpufunc.h>
+#ifdef __powerpc__
+#include <machine/interrupt.h>
+#endif
 
 #define	PMC_FN_PROCESS_EXEC		1
 #define	PMC_FN_CSW_IN			2

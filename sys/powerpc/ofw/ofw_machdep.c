@@ -66,6 +66,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/platform.h>
 #include <machine/ofw_machdep.h>
 #include <machine/trap.h>
+#include <machine/interrupt.h>
 
 #include <contrib/libfdt/libfdt.h>
 

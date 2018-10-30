@@ -215,23 +215,6 @@ bsfq(uint64_t word)
 	return (cnttzd(word));
 }
 
-static __inline register_t
-intr_disable(void)
-{
-	register_t msr;
-
-	msr = mfmsr();
-	mtmsr(msr & ~PSL_EE);
-	return (msr);
-}
-
-static __inline void
-intr_restore(register_t msr)
-{
-
-	mtmsr(msr);
-}
-
 static __inline struct pcpu *
 get_pcpu(void)
 {

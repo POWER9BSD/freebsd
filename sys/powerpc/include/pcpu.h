@@ -48,7 +48,6 @@ struct pvo_entry;
 #endif
 
 #define	PCPU_MD_COMMON_FIELDS					\
-	int		pc_inside_intr;					\
 	PCPU_PPC_FIELDS							\
 	struct thread	*pc_fputhread;		/* current fpu user */	\
 	struct thread	*pc_vecthread;		/* current vec user */  \
@@ -57,6 +56,10 @@ struct pvo_entry;
 	int		pc_bsp;						\
 	volatile int	pc_awake;					\
 	uint32_t	pc_ipimask;					\
+	uint32_t	pc_intr_flags __aligned(CACHE_LINE_SIZE);	\
+	uint32_t	pc_pend_exi;						\
+	uint32_t	pc_pend_decr;						\
+	uint32_t	pc_pend_hvi;						\
 	register_t	pc_tempsave[CPUSAVE_LEN];			\
 	register_t	pc_disisave[CPUSAVE_LEN];			\
 	register_t	pc_dbsave[CPUSAVE_LEN];				\

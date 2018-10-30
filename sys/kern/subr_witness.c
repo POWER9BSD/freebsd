@@ -116,6 +116,9 @@ __FBSDID("$FreeBSD$");
 #endif
 
 #include <machine/stdarg.h>
+#ifdef __powerpc__
+#include <machine/interrupt.h>
+#endif
 
 #if !defined(DDB) && !defined(STACK)
 #error "DDB or STACK options are required for WITNESS"

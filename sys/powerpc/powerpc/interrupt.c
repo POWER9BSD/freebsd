@@ -68,6 +68,59 @@
 
 #include "pic_if.h"
 
+static register_t
+save_context(struct thread *td, struct trapframe **oldframe,
+	struct trapframe *newframe)
+{
+	uint32_t flags;
+	uint64_t msr;
+
+	td->td_intr_nesting_level += 1;
+	flags = PCPU_GET(intr_flags);
+	flags |= PPC_INTR_DISABLE;
+	PCPU_SET(intr_flags, flags);
+	msr = mfmsr();
+	mtmsr(msr | PSL_EE);
+	return (msr);
+}
+
+static void
+restore_context(struct thread *td, struct trapframe *oldframe, register_t msr)
+{
+	mtmsr(msr);
+	td->td_intr_frame = oldframe;
+	td->td_intr_nesting_level -= 1;
+}
+
+void
+delayed_interrupt(void)
+{
+	uint32_t pend_exi, pend_hvi, pend_decr;
+	uint64_t msr;
+	struct pcpu *pcpupp;
+
+	pcpupp = get_pcpu();
+	msr = mfmsr();
+	while (pcpupp->pc_intr_flags & PPC_INTR_PEND) {
+		pcpupp->pc_intr_flags &= ~PPC_INTR_PEND;
+		pend_exi = pcpupp->pc_pend_exi;
+		pend_hvi = pcpupp->pc_pend_hvi;
+		pend_decr = pcpupp->pc_pend_decr;
+		pcpupp->pc_pend_exi = 0;
+		pcpupp->pc_pend_hvi = 0;
+		pcpupp->pc_pend_decr = 0;
+		mtmsr(msr | PSL_EE);
+		/*
+		 * Update persistent pend stats XXX
+		 */
+		if (pend_exi | pend_hvi)
+			PIC_DISPATCH(root_pic, NULL);
+		if (pend_decr)
+			decr_intr(NULL);
+		mtmsr(msr);
+	}
+}
+
 /*
  * A very short dispatch, to try and maximise assembler code use
  * between all exception types. Maybe 'true' interrupts should go
@@ -78,44 +131,45 @@ powerpc_interrupt(struct trapframe *framep)
 {
 	struct thread *td;
 	struct trapframe *oldframe;
-	register_t ee;
+	register_t ee, msr;
 
 	td = curthread;
-
+	oldframe = td->td_intr_frame;
 	CTR2(KTR_INTR, "%s: EXC=%x", __func__, framep->exc);
-
+	/*
+	 * We only leave interrupts disabled for PMC
+	 */
 	switch (framep->exc) {
 	case EXC_EXI:
 	case EXC_HVI:
-		critical_enter();
+		msr = save_context(td, &oldframe, framep);
 		PIC_DISPATCH(root_pic, framep);
-		critical_exit();
+		restore_context(td, oldframe, msr);
 #ifdef BOOKE
 		framep->srr1 &= ~PSL_WE;
 #endif
 		break;
 
 	case EXC_DECR:
-		critical_enter();
-		atomic_add_int(&td->td_intr_nesting_level, 1);
-		oldframe = td->td_intr_frame;
-		td->td_intr_frame = framep;
+		msr = save_context(td, &oldframe, framep);
 		decr_intr(framep);
-		td->td_intr_frame = oldframe;
-		atomic_subtract_int(&td->td_intr_nesting_level, 1);
-		critical_exit();
+		restore_context(td, oldframe, msr);
 #ifdef BOOKE
 		framep->srr1 &= ~PSL_WE;
 #endif
 		break;
 #ifdef HWPMC_HOOKS
 	case EXC_PERF:
-		critical_enter();
 		KASSERT(pmc_intr != NULL, ("Performance exception, but no handler!"));
 		(*pmc_intr)(framep);
-		if (pmc_hook && (PCPU_GET(curthread)->td_pflags & TDP_CALLCHAIN))
+		ee = framep->srr1 & PSL_EE;
+		msr = mfmsr();
+		mtmsr(msr | ee);
+		if (pmc_hook && (PCPU_GET(curthread)->td_pflags & TDP_CALLCHAIN)) {
+			KASSERT(ee, ("TDP_CALLCHAIN set in interrupt disabled context"));
 			pmc_hook(PCPU_GET(curthread), PMC_FN_USER_CALLCHAIN, framep);
-		critical_exit();
+		}
+		mtmsr(msr);
 		break;
 #endif
 

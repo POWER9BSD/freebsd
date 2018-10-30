@@ -199,95 +199,101 @@ restore_kernsrs:
 	std	%r31,FRAME_SRR1+48(1);					\
 	ld	%r13,PC_CURTHREAD(%r2)	/* set kernel curthread */
 
-#define	FRAME_LEAVE(savearea)						\
-/* Disable exceptions: */						\
-	mfmsr	%r2;							\
-	andi.	%r2,%r2,~PSL_EE@l;					\
-	mtmsr	%r2;							\
-	isync;								\
-/* Now restore regs: */							\
-	ld	%r2,FRAME_SRR0+48(%r1);					\
-	ld	%r3,FRAME_SRR1+48(%r1);					\
-	ld	%r4,FRAME_CTR+48(%r1);					\
-	ld	%r5,FRAME_XER+48(%r1);					\
-	ld	%r6,FRAME_LR+48(%r1);					\
-	GET_CPUINFO(%r7);						\
-	std	%r2,(savearea+CPUSAVE_SRR0)(%r7); /* save SRR0 */	\
-	std	%r3,(savearea+CPUSAVE_SRR1)(%r7); /* save SRR1 */	\
-	ld	%r7,FRAME_CR+48(%r1);					\
-	mtctr	%r4;							\
-	mtxer	%r5;							\
-	mtlr	%r6;							\
-	mtsprg2	%r7;			/* save cr */			\
-	ld	%r31,FRAME_31+48(%r1);   /* restore r0-31 */		\
-	ld	%r30,FRAME_30+48(%r1);					\
-	ld	%r29,FRAME_29+48(%r1);					\
-	ld	%r28,FRAME_28+48(%r1);					\
-	ld	%r27,FRAME_27+48(%r1);					\
-	ld	%r26,FRAME_26+48(%r1);					\
-	ld	%r25,FRAME_25+48(%r1);					\
-	ld	%r24,FRAME_24+48(%r1);					\
-	ld	%r23,FRAME_23+48(%r1);					\
-	ld	%r22,FRAME_22+48(%r1);					\
-	ld	%r21,FRAME_21+48(%r1);					\
-	ld	%r20,FRAME_20+48(%r1);					\
-	ld	%r19,FRAME_19+48(%r1);					\
-	ld	%r18,FRAME_18+48(%r1);					\
-	ld	%r17,FRAME_17+48(%r1);					\
-	ld	%r16,FRAME_16+48(%r1);					\
-	ld	%r15,FRAME_15+48(%r1);					\
-	ld	%r14,FRAME_14+48(%r1);					\
-	ld	%r13,FRAME_13+48(%r1);					\
-	ld	%r12,FRAME_12+48(%r1);					\
-	ld	%r11,FRAME_11+48(%r1);					\
-	ld	%r10,FRAME_10+48(%r1);					\
-	ld	%r9, FRAME_9+48(%r1);					\
-	ld	%r8, FRAME_8+48(%r1);					\
-	ld	%r7, FRAME_7+48(%r1);					\
-	ld	%r6, FRAME_6+48(%r1);					\
-	ld	%r5, FRAME_5+48(%r1);					\
-	ld	%r4, FRAME_4+48(%r1);					\
-	ld	%r3, FRAME_3+48(%r1);					\
-	ld	%r2, FRAME_2+48(%r1);					\
-	ld	%r0, FRAME_0+48(%r1);					\
-	ld	%r1, FRAME_1+48(%r1);					\
-/* Can't touch %r1 from here on */					\
-	mtsprg3	%r3;			/* save r3 */			\
-/* Disable translation, machine check and recoverability: */		\
-	mfmsr	%r3;							\
-	andi.	%r3,%r3,~(PSL_DR|PSL_IR|PSL_ME|PSL_RI)@l;		\
-	mtmsr	%r3;							\
-	isync;								\
-/* Decide whether we return to user mode: */				\
-	GET_CPUINFO(%r3);						\
-	ld	%r3,(savearea+CPUSAVE_SRR1)(%r3);			\
-	mtcr	%r3;							\
-	bf	17,1f;			/* branch if PSL_PR is false */	\
-/* Restore user SRs */							\
-	GET_CPUINFO(%r3);						\
-	std	%r27,(savearea+CPUSAVE_R27)(%r3);			\
-	std	%r28,(savearea+CPUSAVE_R28)(%r3);			\
-	std	%r29,(savearea+CPUSAVE_R29)(%r3);			\
-	std	%r30,(savearea+CPUSAVE_R30)(%r3);			\
-	std	%r31,(savearea+CPUSAVE_R31)(%r3);			\
-	mflr	%r27;			/* preserve LR */		\
-	bl	restore_usersrs;	/* uses r28-r31 */		\
-	mtlr	%r27;							\
-	ld	%r31,(savearea+CPUSAVE_R31)(%r3);			\
-	ld	%r30,(savearea+CPUSAVE_R30)(%r3);			\
-	ld	%r29,(savearea+CPUSAVE_R29)(%r3);			\
-	ld	%r28,(savearea+CPUSAVE_R28)(%r3);			\
-	ld	%r27,(savearea+CPUSAVE_R27)(%r3);			\
-1:	mfsprg2	%r3;			/* restore cr */		\
-	mtcr	%r3;							\
-	GET_CPUINFO(%r3);						\
-	ld	%r3,(savearea+CPUSAVE_SRR0)(%r3); /* restore srr0 */	\
-	mtsrr0	%r3;							\
-	GET_CPUINFO(%r3);						\
-	ld	%r3,(savearea+CPUSAVE_SRR1)(%r3); /* restore srr1 */	\
-	mtsrr1	%r3;							\
+.macro	FRAME_LEAVE savearea
+/* Disable exceptions: */
+	mfmsr	%r2;
+	andi.	%r2,%r2,~PSL_EE@l;
+	mtmsr	%r2;
+	isync;
+/* Now restore regs: */	
+	ld	%r2,FRAME_SRR0+48(%r1);
+	ld	%r3,FRAME_SRR1+48(%r1);
+	ld	%r4,FRAME_CTR+48(%r1);
+	ld	%r5,FRAME_XER+48(%r1);
+	ld	%r6,FRAME_LR+48(%r1);
+	GET_CPUINFO(%r7);
+	std	%r2,(\savearea+CPUSAVE_SRR0)(%r7); /* save SRR0 */
+	std	%r3,(\savearea+CPUSAVE_SRR1)(%r7); /* save SRR1 */
+	ld	%r7,FRAME_CR+48(%r1);
+	mtctr	%r4;
+	mtxer	%r5;
+	mtlr	%r6;
+	mtsprg2	%r7;			/* save cr */
+	ld	%r31,FRAME_31+48(%r1);   /* restore r0-31 */
+	ld	%r30,FRAME_30+48(%r1);
+	ld	%r29,FRAME_29+48(%r1);
+	ld	%r28,FRAME_28+48(%r1);
+	ld	%r27,FRAME_27+48(%r1);
+	ld	%r26,FRAME_26+48(%r1);
+	ld	%r25,FRAME_25+48(%r1);
+	ld	%r24,FRAME_24+48(%r1);
+	ld	%r23,FRAME_23+48(%r1);
+	ld	%r22,FRAME_22+48(%r1);
+	ld	%r21,FRAME_21+48(%r1);
+	ld	%r20,FRAME_20+48(%r1);
+	ld	%r19,FRAME_19+48(%r1);
+	ld	%r18,FRAME_18+48(%r1);
+	ld	%r17,FRAME_17+48(%r1);
+	ld	%r16,FRAME_16+48(%r1);
+	ld	%r15,FRAME_15+48(%r1);
+	ld	%r14,FRAME_14+48(%r1);
+	ld	%r13,FRAME_13+48(%r1);
+	ld	%r12,FRAME_12+48(%r1);
+	ld	%r11,FRAME_11+48(%r1);
+	ld	%r10,FRAME_10+48(%r1);
+	ld	%r9, FRAME_9+48(%r1);
+	ld	%r8, FRAME_8+48(%r1);
+	ld	%r7, FRAME_7+48(%r1);
+	ld	%r6, FRAME_6+48(%r1);
+	ld	%r5, FRAME_5+48(%r1);
+	ld	%r4, FRAME_4+48(%r1);
+	ld	%r3, FRAME_3+48(%r1);
+	ld	%r2, FRAME_2+48(%r1);
+	ld	%r0, FRAME_0+48(%r1);
+	ld	%r1, FRAME_1+48(%r1);
+/* Can't touch %r1 from here on */
+	mtsprg3	%r3;			/* save r3 */
+/* Disable translation, machine check and recoverability: */
+	mfmsr	%r3;
+	andi.	%r3,%r3,~(PSL_DR|PSL_IR|PSL_ME|PSL_RI)@l;
+	mtmsr	%r3;
+	isync;
+/* Decide whether we return to user mode: */
+	GET_CPUINFO(%r3);
+	ld	%r3,(\savearea+CPUSAVE_SRR1)(%r3);
+	mtcr	%r3;
+	bf	17,1f;			/* branch if PSL_PR is false */
+	mfspr	%r3, SPR_LPCR						
+	sri	%r3, %r3, 20		/* move LPCR_HR to lowest bit */
+	andi.	%r3, %r3, 0x1		/* is radix enabled ? */
+	/* restore_usersrs superfluous under radix */
+	beq+	1f
+/* Restore user SRs */
+	GET_CPUINFO(%r3);
+	std	%r27,(\savearea+CPUSAVE_R27)(%r3);
+	std	%r28,(\savearea+CPUSAVE_R28)(%r3);
+	std	%r29,(\savearea+CPUSAVE_R29)(%r3);
+	std	%r30,(\savearea+CPUSAVE_R30)(%r3);
+	std	%r31,(\savearea+CPUSAVE_R31)(%r3);
+	mflr	%r27;			/* preserve LR */
+	bl	restore_usersrs;	/* uses r28-r31 */
+	mtlr	%r27;
+	ld	%r31,(\savearea+CPUSAVE_R31)(%r3)
+	ld	%r30,(\savearea+CPUSAVE_R30)(%r3)
+	ld	%r29,(\savearea+CPUSAVE_R29)(%r3)
+	ld	%r28,(\savearea+CPUSAVE_R28)(%r3)
+	ld	%r27,(\savearea+CPUSAVE_R27)(%r3)
+1:	mfsprg2	%r3			/* restore cr */
+	mtcr	%r3
+	GET_CPUINFO(%r3)
+	ld	%r3,(\savearea+CPUSAVE_SRR0)(%r3)
+	mtsrr0	%r3
+	GET_CPUINFO(%r3)
+	ld	%r3,(\savearea+CPUSAVE_SRR1)(%r3); /* restore srr1 */
+	mtsrr1	%r3
 	mfsprg3	%r3			/* restore r3 */
-
+.endm
+	
 #ifdef KDTRACE_HOOKS
 	.data
 	.globl	dtrace_invop_calltrap_addr
@@ -428,6 +434,44 @@ cpu_wakeup_handler:
 	ld	%r2,PCB_TOC(%r3)	/* Load the TOC pointer */
 
 	rfid
+
+
+	.globl	CNAME(exi_trapcode),CNAME(exi_trapcodeend)
+	.p2align 3
+CNAME(exi_trapcode):
+	mtsprg1	%r1			/* save SP */
+	mflr	%r1			/* Save the old LR in r1 */
+	mtsprg2 %r1			/* And then in SPRG2 */
+	ld	%r1,TRAP_GENTRAP(0)
+	addi	%r1,%r1,(exitrap-generictrap)
+	mtlr	%r1
+	blrl				/* Branch to exitrap */
+	nop
+CNAME(exi_trapcodeend):
+	.globl	CNAME(hvi_trapcode),CNAME(hvi_trapcodeend)
+	.p2align 3
+CNAME(hvi_trapcode):
+	mtsprg1	%r1			/* save SP */
+	mflr	%r1			/* Save the old LR in r1 */
+	mtsprg2 %r1			/* And then in SPRG2 */
+	ld	%r1,TRAP_GENTRAP(0)
+	addi	%r1,%r1,(hvitrap-generictrap)
+	mtlr	%r1
+	blrl				/* Branch to hvitrap */
+	nop
+CNAME(hvi_trapcodeend):
+	.globl	CNAME(decr_trapcode),CNAME(decr_trapcodeend)
+	.p2align 3
+CNAME(decr_trapcode):
+	mtsprg1	%r1			/* save SP */
+	mflr	%r1			/* Save the old LR in r1 */
+	mtsprg2 %r1			/* And then in SPRG2 */
+	ld	%r1,TRAP_GENTRAP(0)
+	addi	%r1,%r1,(decrtrap-generictrap)
+	mtlr	%r1
+	blrl				/* Branch to decrtrap */
+	nop
+CNAME(decr_trapcodeend):
 
 /*
  * This code gets copied to all the trap vectors
@@ -744,6 +788,64 @@ disitrap:
 	b	dbtrap
 #endif
 
+.MACRO SAVE_CONTEXT
+	mtsprg3 %r1
+	GET_CPUINFO(%r1)
+	std	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)	/* free r30-31 */
+	std	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
+	lwz	%r30, PC_INTR_FLAGS(%r1)
+	ori	%r30, %r30, PPC_INTR_PEND
+	stw	%r30, PC_INTR_FLAGS(%r1)
+.endm
+
+hvitrap:
+	SAVE_CONTEXT
+	andi.	%r30, %r30, PPC_INTR_DISABLE
+	/* note that an hvitrap was seen */
+	lwz	%r31, PC_PEND_HVI(%r1)
+	addi	%r31, %r31, 1
+	stw	%r31, PC_PEND_HVI(%r1)
+	bne-	fastreturn
+	li	%r30, EXC_HVI
+	mfspr	%r31, SPR_HSRR0
+	mtsrr0	%r31
+	mfspr	%r31, SPR_HSRR1
+	mtsrr1	%r31
+	b	generictrap_late
+exitrap:
+	SAVE_CONTEXT
+	andi.	%r30, %r30, PPC_INTR_DISABLE
+	/* note that an exitrap was seen */
+	lwz	%r31, PC_PEND_EXI(%r1)
+	addi	%r31, %r31, 1
+	stw	%r31, PC_PEND_EXI(%r1)
+	bne-	fastreturn
+	li	%r30, EXC_EXI
+	b	generictrap_late
+decrtrap:
+	SAVE_CONTEXT
+	andi.	%r30, %r30, PPC_INTR_DISABLE|PPC_NMI_ENA|PPC_DECR_SAMPLE
+	/* note that an decrtrap was seen */
+	lwz	%r31, PC_PEND_DECR(%r1)
+	addi	%r31, %r31, 1
+	stw	%r31, PC_PEND_DECR(%r1)
+	cmplwi	%r30, PPC_INTR_DISABLE
+	beq-	fastreturn
+	li	%r30, EXC_DECR
+	b	generictrap_late
+
+/*
+ * restore lr, r1, r30, and r31
+ */
+fastreturn:
+	ld	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)
+	ld	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
+	mfsprg2	%r1
+	mtlr	%r1
+	mfsprg1	%r1
+	rfid
+
+
 	/* XXX need stack probe here */
 realtrap:
 /* Test whether we already had PR set */
@@ -760,6 +862,7 @@ realtrap:
 	mfsprg2	%r29
 	mr	%r28,%r27
 	b	s_trap
+
 
 /*
  * generictrap does some standard setup for trap handling to minimize
@@ -785,16 +888,9 @@ generictrap:
 
 	/* Save interesting registers */
 	GET_CPUINFO(%r1)
-	std	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)	/* free r27-r31 */
-	std	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
-	std	%r29,(PC_TEMPSAVE+CPUSAVE_R29)(%r1)
-	std	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)
+
+	std	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)	/* free r30,r31 */
 	std	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
-	mfdar	%r30
-	std	%r30,(PC_TEMPSAVE+CPUSAVE_AIM_DAR)(%r1)
-	mfsprg1	%r1			/* restore SP, in case of branch */
-	mfsprg2	%r28			/* save LR */
-	mfcr	%r29			/* save CR */
 
 	/* Compute the exception vector from the link register */
 	mfsprg3 %r31
@@ -802,7 +898,19 @@ generictrap:
 	mflr	%r30
 	addi	%r30,%r30,-4 /* The branch instruction, not the next */
 	and	%r30,%r30,%r31
+
+generictrap_late:
 	mtsprg3	%r30
+
+	std	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)	/* free r27-29 */
+	std	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
+	std	%r29,(PC_TEMPSAVE+CPUSAVE_R29)(%r1)
+
+	mfdar	%r30
+	std	%r30,(PC_TEMPSAVE+CPUSAVE_AIM_DAR)(%r1)
+	mfsprg1	%r1			/* restore SP, in case of branch */
+	mfsprg2	%r28			/* save LR */
+	mfcr	%r29			/* save CR */
 
 	/* Test whether we already had PR set */
 	mfsrr1	%r31
@@ -810,6 +918,11 @@ generictrap:
 
 s_trap:
 	bf	17,k_trap		/* branch if PSL_PR is false */
+	mfspr	%r1, SPR_LPCR
+	sri	%r1, %r1, 20		/* move LPCR_HR to lowest bit */
+	andi.	%r1, %r1, 0x1		/* is radix enabled ? */
+	/* restore_kernsrs superfluous under radix */
+	beq+	k_trap
 	GET_CPUINFO(%r1)
 u_trap:
 	ld	%r1,PC_CURPCB(%r1)
@@ -861,7 +974,7 @@ CNAME(trapexit):
 CNAME(asttrapexit):
 	b	trapexit		/* test ast ret value ? */
 1:
-	FRAME_LEAVE(PC_TEMPSAVE)
+	FRAME_LEAVE savearea=PC_TEMPSAVE
 	rfid
 
 #if defined(KDB)
@@ -912,7 +1025,7 @@ dbtrap:
 	ld	%r3,FRAME_EXC+48(%r1)	/* save exception */
 	GET_CPUINFO(%r4)
 	std	%r3,(PC_DBSAVE+CPUSAVE_R31)(%r4)
-	FRAME_LEAVE(PC_DBSAVE)
+	FRAME_LEAVE savearea=PC_DBSAVE
 	mtsprg1	%r1			/* prepare for entrance to realtrap */
 	GET_CPUINFO(%r1)
 	std	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)
@@ -927,7 +1040,7 @@ dbtrap:
 	mfsprg1	%r1
 	b	realtrap
 dbleave:
-	FRAME_LEAVE(PC_DBSAVE)
+	FRAME_LEAVE savearea=PC_DBSAVE
 	rfid
 
 /*

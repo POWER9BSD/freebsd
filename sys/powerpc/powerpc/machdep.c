@@ -123,6 +123,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/trap.h>
 #include <machine/vmparam.h>
 #include <machine/ofw_machdep.h>
+#include <machine/interrupt.h>
 
 #include <ddb/ddb.h>
 
@@ -564,8 +565,8 @@ spinlock_enter(void)
 
 	td = curthread;
 	if (td->td_md.md_spinlock_count == 0) {
-		__asm __volatile("or 2,2,2"); /* Set high thread priority */
 		msr = intr_disable();
+		HMT_medium_high();
 		td->td_md.md_spinlock_count = 1;
 		td->td_md.md_saved_msr = msr;
 	} else
@@ -585,7 +586,7 @@ spinlock_exit(void)
 	td->td_md.md_spinlock_count--;
 	if (td->td_md.md_spinlock_count == 0) {
 		intr_restore(msr);
-		__asm __volatile("or 6,6,6"); /* Set normal thread priority */
+		HMT_medium();
 	}
 }
 
