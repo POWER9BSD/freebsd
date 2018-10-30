@@ -230,6 +230,7 @@ dev/bxe/57711_init_values.c     optional	bxe pci
 dev/bxe/57712_init_values.c     optional	bxe pci
 dev/coretemp/coretemp.c		optional	coretemp
 dev/cpuctl/cpuctl.c		optional	cpuctl
+dev/cpufreq/ichss.c		optional cpufreq pci
 dev/dpms/dpms.c			optional	dpms
 # There are no systems with isa slots, so all ed isa entries should go..
 dev/ed/if_ed_3c503.c		optional	ed isa ed_3c503
