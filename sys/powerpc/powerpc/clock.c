@@ -110,11 +110,11 @@ static struct timecounter	decr_tc = {
  * Decrementer interrupt handler.
  */
 void
-decr_intr(struct trapframe *frame, uint32_t pend_ticks)
+decr_intr(struct trapframe *frame, uint32_t pend_ticks,
+	uint32_t decrval)
 {
 	struct decr_state *s = DPCPU_PTR(decr_state);
-	int		nticks = 0;
-	int32_t		val;
+	int		nticks = 1;
 
 	if (!initialized)
 		return;
@@ -134,13 +134,12 @@ decr_intr(struct trapframe *frame, uint32_t pend_ticks)
 		 * Based on the actual time delay since the last decrementer
 		 * reload, we arrange for earlier interrupt next time.
 		 */
-		__asm ("mfdec %0" : "=r"(val));
-		while (val < 0) {
-			val += s->div;
+		while (decrval < 0) {
+			decrval += s->div;
 			nticks++;
 		}
 		nticks += pend_ticks;
-		mtdec(val);
+		mtdec(decrval);
 	} else if (s->mode == 2) {
 		nticks = pend_ticks;
 		decr_et_stop(NULL);

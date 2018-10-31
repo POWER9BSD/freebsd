@@ -70,69 +70,98 @@
 #include "pic_if.h"
 
 static register_t
-save_context(struct thread *td, struct trapframe *newframe, uint32_t *oldflags)
+save_context(struct thread *td, struct trapframe *newframe)
 {
-	uint32_t flags __unused;
+	uint32_t flags;
 	uint64_t msr;
 
-	MPASS((PCPU_GET(intr_flags) & PPC_INTR_DISABLE) == 0);
-	td->td_intr_nesting_level += 1;
+	td->td_critnest++;
+	td->td_intr_nesting_level++;
+	flags = PCPU_GET(intr_flags);
+	MPASS((flags & PPC_INTR_DISABLE) == 0);
 	td->td_intr_frame = newframe;
 	msr = mfmsr();
 #ifdef __powerpc64__
-	flags = *oldflags = PCPU_GET(intr_flags);
-	flags |= PPC_INTR_DISABLE;
-	PCPU_SET(intr_flags, flags);
+	/*
+	 * Soft disable interrupts before hard enabling
+	 */
+	PCPU_SET(intr_flags, flags | PPC_INTR_DISABLE);
 	mtmsr(msr | PSL_EE);
 #endif
 	return (msr);
 }
 
 static void
-restore_context(struct thread *td, struct trapframe *oldframe, register_t msr,
-	uint32_t oldflags)
+restore_context(struct thread *td, struct trapframe *oldframe, register_t msr)
 {
 	uint32_t flags __unused;
 
-	MPASS(PCPU_GET(intr_flags) & PPC_INTR_DISABLE);
-	mtmsr(msr);
 #ifdef __powerpc64__
-	MPASS(PCPU_GET(intr_flags) & PPC_INTR_DISABLE);
-	PCPU_SET(intr_flags, oldflags);
+	mtmsr(msr);
+	flags = PCPU_GET(intr_flags);
+	MPASS(flags & PPC_INTR_DISABLE);
+
+	/*
+	 * Clear soft disable of interrupts before return
+	 */
+	PCPU_SET(intr_flags, flags & ~PPC_INTR_DISABLE);
 #endif
 	td->td_intr_frame = oldframe;
-	td->td_intr_nesting_level -= 1;
+	td->td_intr_nesting_level--;
+	td->td_critnest--;
 }
 
 #ifdef __powerpc64__
 void
-delayed_interrupt(void)
+delayed_interrupt(struct trapframe *framep)
 {
-	uint32_t pend_exi, pend_hvi, pend_decr;
+	uint32_t pend_decr, *intr_flags;
+	int32_t decrval, tmp;
 	uint64_t msr;
 	struct pcpu *pcpupp;
+	struct thread *td;
 
 	pcpupp = get_pcpu();
+	td = curthread;
 	msr = mfmsr();
-	pend_exi = pend_hvi = pend_decr = 0;
-	while (pcpupp->pc_intr_flags & PPC_INTR_PEND) {
-		pcpupp->pc_intr_flags &= ~PPC_INTR_PEND;
+	td->td_intr_nesting_level++;
+	intr_flags = &pcpupp->pc_intr_flags;
+	while (*intr_flags & PPC_PEND_MASK) {
+#ifdef notyet
+		uint32_t pend_exi, pend_hvi;
 		pend_exi = pcpupp->pc_pend_exi;
 		pend_hvi = pcpupp->pc_pend_hvi;
-		pend_decr = pcpupp->pc_pend_decr;
+#endif
 		pcpupp->pc_pend_exi = 0;
 		pcpupp->pc_pend_hvi = 0;
-		pcpupp->pc_pend_decr = 0;
-		mtmsr(msr | PSL_EE);
 		/*
 		 * Update persistent pend stats XXX
 		 */
-		if (pend_exi | pend_hvi)
-			PIC_DISPATCH(root_pic, NULL);
-		if (pend_decr)
-			decr_intr(NULL, pend_decr);
-		mtmsr(msr);
+		if (*intr_flags & PPC_DECR_PEND) {
+			pend_decr = pcpupp->pc_pend_decr;
+			pcpupp->pc_pend_decr = 0;
+			/*
+			 * Reset decrementer before enabling
+			 * interrupts
+			 */
+			tmp = 0x7fffffff;
+			__asm ("mfdec %0" : "=r"(decrval));
+			__asm ("mtdec %0" : "=r"(tmp));
+
+			*intr_flags &= ~PPC_DECR_PEND;
+			mtmsr(msr | PSL_EE);
+			decr_intr(framep, pend_decr, decrval);
+			mtmsr(msr);
+		}
+		if (*intr_flags & (PPC_EXI_PEND|PPC_HVI_PEND)) {
+			*intr_flags &= ~(PPC_EXI_PEND|PPC_HVI_PEND);
+			mtmsr(msr | PSL_EE);
+
+			PIC_DISPATCH(root_pic, framep);
+			mtmsr(msr);
+		}
 	}
+	td->td_intr_nesting_level--;
 }
 #endif
 
@@ -147,7 +176,7 @@ powerpc_interrupt(struct trapframe *framep)
 	struct thread *td;
 	struct trapframe *oldframe;
 	register_t msr;
-	uint32_t oldflags, pend_decr;
+	uint32_t pend_decr, tmp, decrval;
 	struct pcpu *pcpupp;
 
 	pcpupp = get_pcpu();
@@ -159,21 +188,39 @@ powerpc_interrupt(struct trapframe *framep)
 	 */
 	switch (framep->exc) {
 	case EXC_EXI:
+		pcpupp->pc_pend_exi = 0;
+		pcpupp->pc_intr_flags &= PPC_EXI_PEND;
+		break;
 	case EXC_HVI:
-		msr = save_context(td, framep, &oldflags);
+		pcpupp->pc_pend_hvi = 0;
+		pcpupp->pc_intr_flags &= PPC_HVI_PEND;
+		break;
+	}
+	switch (framep->exc) {
+	case EXC_EXI:
+	case EXC_HVI:
+		msr = save_context(td, framep);
 		PIC_DISPATCH(root_pic, framep);
-		restore_context(td, oldframe, msr, oldflags);
 #ifdef BOOKE
 		framep->srr1 &= ~PSL_WE;
 #endif
+		goto check_missed;
 		break;
 
 	case EXC_DECR:
 		pend_decr = pcpupp->pc_pend_decr;
 		pcpupp->pc_pend_decr = 0;
-		msr = save_context(td, framep, &oldflags);
-		decr_intr(framep, pend_decr);
-		restore_context(td, oldframe, msr, oldflags);
+		pcpupp->pc_intr_flags &= ~PPC_DECR_PEND;
+		/*
+		 * Reset decrementer before enabling
+		 * interrupts
+		 */
+		tmp = 0x7fffffff;
+		__asm ("mfdec %0" : "=r"(decrval));
+		__asm ("mtdec %0" : "=r"(tmp));
+		msr = save_context(td, framep);
+		decr_intr(framep, pend_decr, decrval);
+		goto check_missed;
 #ifdef BOOKE
 		framep->srr1 &= ~PSL_WE;
 #endif
@@ -199,6 +246,15 @@ powerpc_interrupt(struct trapframe *framep)
 		/* Re-enable interrupts if applicable. */
 		if (framep->srr1 & PSL_EE)
 			mtmsr(mfmsr() | PSL_EE);
+		if (__predict_false(pcpupp->pc_intr_flags & PPC_INTR_DISABLE))
+			td->td_critnest++;
 		trap(framep);
-	}	        
+		if (__predict_false(pcpupp->pc_intr_flags & PPC_INTR_DISABLE))
+			td->td_critnest--;
+	}
+	return;
+ check_missed:
+	if (PCPU_GET(intr_flags) & PPC_PEND_MASK)
+		delayed_interrupt(framep);
+	restore_context(td, oldframe, msr);
 }

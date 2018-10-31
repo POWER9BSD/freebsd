@@ -33,7 +33,7 @@
 #include <sys/systm.h>
 #include <sys/pcpu.h>
 #include <machine/trap.h>
-extern void delayed_interrupt(void);
+void delayed_interrupt(struct trapframe *);
 
 static __inline register_t
 intr_disable(void)
@@ -42,6 +42,8 @@ intr_disable(void)
 	int intr_flags;
 	struct pcpu *pcpupp;
 
+	if (__predict_false(cold))
+		return (PPC_INTR_DISABLE);
 	pcpupp = get_pcpu();
 	msr = mfmsr();
 	mtmsr(msr & ~PSL_EE);
@@ -57,17 +59,22 @@ intr_restore(register_t flags)
 {
 	register_t msr;
 	struct pcpu *pcpupp;
+	struct thread_lite *td;
 
+	if (__predict_false(cold))
+		return;
 	if (flags & PPC_INTR_DISABLE)
 		return;
+	td = (struct thread_lite *)curthread;
 	msr = mfmsr();
 	mtmsr(msr & ~PSL_EE);
 	pcpupp = get_pcpu();
-	if (__predict_false(pcpupp->pc_intr_flags & PPC_INTR_PEND)) {
-		delayed_interrupt();
-	}
+	if (__predict_false(pcpupp->pc_intr_flags & PPC_PEND_MASK))
+		delayed_interrupt(NULL);
 	pcpupp->pc_intr_flags &= ~PPC_INTR_DISABLE;
 	mtmsr(msr);
+	if (__predict_false(td->td_owepreempt))
+		critical_exit_preempt();
 }
 #else
 

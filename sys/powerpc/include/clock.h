@@ -13,7 +13,7 @@
 
 struct trapframe;
 
-void	decr_intr(struct trapframe *, uint32_t);
+void	decr_intr(struct trapframe *, uint32_t, uint32_t);
 
 #endif
 
