@@ -49,6 +49,7 @@
 #include <sys/pmckern.h>
 #endif
 #include <sys/proc.h>
+#include <sys/kdb.h>
 #include <sys/smp.h>
 #include <sys/unistd.h>
 #include <sys/vmmeter.h>
@@ -69,16 +70,17 @@
 #include "pic_if.h"
 
 static register_t
-save_context(struct thread *td, struct trapframe *newframe)
+save_context(struct thread *td, struct trapframe *newframe, uint32_t *oldflags)
 {
 	uint32_t flags __unused;
 	uint64_t msr;
 
+	MPASS((PCPU_GET(intr_flags) & PPC_INTR_DISABLE) == 0);
 	td->td_intr_nesting_level += 1;
 	td->td_intr_frame = newframe;
 	msr = mfmsr();
-#ifdef __powerpcp64__
-	flags = PCPU_GET(intr_flags);
+#ifdef __powerpc64__
+	flags = *oldflags = PCPU_GET(intr_flags);
 	flags |= PPC_INTR_DISABLE;
 	PCPU_SET(intr_flags, flags);
 	mtmsr(msr | PSL_EE);
@@ -87,9 +89,17 @@ save_context(struct thread *td, struct trapframe *newframe)
 }
 
 static void
-restore_context(struct thread *td, struct trapframe *oldframe, register_t msr)
+restore_context(struct thread *td, struct trapframe *oldframe, register_t msr,
+	uint32_t oldflags)
 {
+	uint32_t flags __unused;
+
+	MPASS(PCPU_GET(intr_flags) & PPC_INTR_DISABLE);
 	mtmsr(msr);
+#ifdef __powerpc64__
+	MPASS(PCPU_GET(intr_flags) & PPC_INTR_DISABLE);
+	PCPU_SET(intr_flags, oldflags);
+#endif
 	td->td_intr_frame = oldframe;
 	td->td_intr_nesting_level -= 1;
 }
@@ -104,11 +114,12 @@ delayed_interrupt(void)
 
 	pcpupp = get_pcpu();
 	msr = mfmsr();
+	pend_exi = pend_hvi = pend_decr = 0;
 	while (pcpupp->pc_intr_flags & PPC_INTR_PEND) {
 		pcpupp->pc_intr_flags &= ~PPC_INTR_PEND;
-		pend_exi = pcpupp->pc_pend_exi;
-		pend_hvi = pcpupp->pc_pend_hvi;
-		pend_decr = pcpupp->pc_pend_decr;
+		pend_exi += pcpupp->pc_pend_exi;
+		pend_hvi += pcpupp->pc_pend_hvi;
+		pend_decr += pcpupp->pc_pend_decr;
 		pcpupp->pc_pend_exi = 0;
 		pcpupp->pc_pend_hvi = 0;
 		pcpupp->pc_pend_decr = 0;
@@ -136,6 +147,7 @@ powerpc_interrupt(struct trapframe *framep)
 	struct thread *td;
 	struct trapframe *oldframe;
 	register_t msr;
+	uint32_t oldflags;
 
 	td = curthread;
 	oldframe = td->td_intr_frame;
@@ -146,18 +158,18 @@ powerpc_interrupt(struct trapframe *framep)
 	switch (framep->exc) {
 	case EXC_EXI:
 	case EXC_HVI:
-		msr = save_context(td, framep);
+		msr = save_context(td, framep, &oldflags);
 		PIC_DISPATCH(root_pic, framep);
-		restore_context(td, oldframe, msr);
+		restore_context(td, oldframe, msr, oldflags);
 #ifdef BOOKE
 		framep->srr1 &= ~PSL_WE;
 #endif
 		break;
 
 	case EXC_DECR:
-		msr = save_context(td, framep);
+		msr = save_context(td, framep, &oldflags);
 		decr_intr(framep);
-		restore_context(td, oldframe, msr);
+		restore_context(td, oldframe, msr, oldflags);
 #ifdef BOOKE
 		framep->srr1 &= ~PSL_WE;
 #endif
