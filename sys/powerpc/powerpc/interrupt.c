@@ -69,18 +69,20 @@
 #include "pic_if.h"
 
 static register_t
-save_context(struct thread *td, struct trapframe **oldframe,
-	struct trapframe *newframe)
+save_context(struct thread *td, struct trapframe *newframe)
 {
-	uint32_t flags;
+	uint32_t flags __unused;
 	uint64_t msr;
 
 	td->td_intr_nesting_level += 1;
+	td->td_intr_frame = newframe;
+	msr = mfmsr();
+#ifdef __powerpcp64__
 	flags = PCPU_GET(intr_flags);
 	flags |= PPC_INTR_DISABLE;
 	PCPU_SET(intr_flags, flags);
-	msr = mfmsr();
 	mtmsr(msr | PSL_EE);
+#endif
 	return (msr);
 }
 
@@ -92,6 +94,7 @@ restore_context(struct thread *td, struct trapframe *oldframe, register_t msr)
 	td->td_intr_nesting_level -= 1;
 }
 
+#ifdef __powerpc64__
 void
 delayed_interrupt(void)
 {
@@ -120,6 +123,7 @@ delayed_interrupt(void)
 		mtmsr(msr);
 	}
 }
+#endif
 
 /*
  * A very short dispatch, to try and maximise assembler code use
@@ -131,7 +135,7 @@ powerpc_interrupt(struct trapframe *framep)
 {
 	struct thread *td;
 	struct trapframe *oldframe;
-	register_t ee, msr;
+	register_t msr;
 
 	td = curthread;
 	oldframe = td->td_intr_frame;
@@ -142,7 +146,7 @@ powerpc_interrupt(struct trapframe *framep)
 	switch (framep->exc) {
 	case EXC_EXI:
 	case EXC_HVI:
-		msr = save_context(td, &oldframe, framep);
+		msr = save_context(td, framep);
 		PIC_DISPATCH(root_pic, framep);
 		restore_context(td, oldframe, msr);
 #ifdef BOOKE
@@ -151,7 +155,7 @@ powerpc_interrupt(struct trapframe *framep)
 		break;
 
 	case EXC_DECR:
-		msr = save_context(td, &oldframe, framep);
+		msr = save_context(td, framep);
 		decr_intr(framep);
 		restore_context(td, oldframe, msr);
 #ifdef BOOKE
@@ -162,22 +166,23 @@ powerpc_interrupt(struct trapframe *framep)
 	case EXC_PERF:
 		KASSERT(pmc_intr != NULL, ("Performance exception, but no handler!"));
 		(*pmc_intr)(framep);
-		ee = framep->srr1 & PSL_EE;
-		msr = mfmsr();
-		mtmsr(msr | ee);
 		if (pmc_hook && (PCPU_GET(curthread)->td_pflags & TDP_CALLCHAIN)) {
-			KASSERT(ee, ("TDP_CALLCHAIN set in interrupt disabled context"));
+			msr = mfmsr();
+#ifdef __powerpc64__
+			mtmsr(msr | PSL_EE);
+			KASSERT(framep->srr1 & PSL_EE,
+				("TDP_CALLCHAIN set in interrupt disabled context"));
+#endif
 			pmc_hook(PCPU_GET(curthread), PMC_FN_USER_CALLCHAIN, framep);
+			mtmsr(msr);
 		}
-		mtmsr(msr);
 		break;
 #endif
 
 	default:
 		/* Re-enable interrupts if applicable. */
-		ee = framep->srr1 & PSL_EE;
-		if (ee != 0)
-			mtmsr(mfmsr() | ee);
+		if (framep->srr1 & PSL_EE)
+			mtmsr(mfmsr() | PSL_EE);
 		trap(framep);
 	}	        
 }

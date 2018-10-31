@@ -28,6 +28,8 @@
  */
 #ifndef __POWERPC_INTERRUPT_H_
 #define __POWERPC_INTERRUPT_H_
+
+#ifdef __powerpc64__
 #include <sys/systm.h>
 #include <sys/pcpu.h>
 #include <machine/trap.h>
@@ -73,5 +75,22 @@ intr_restore(register_t flags)
 	critical_exit();
 	mtmsr(msr);
 }
+#else
 
+static __inline register_t
+intr_disable(void)
+{
+	register_t msr;
+
+	msr = mfmsr();
+	mtmsr(msr & ~PSL_EE);
+	return (msr);
+}
+
+static __inline void
+intr_restore(register_t msr)
+{
+	mtmsr(msr);
+}
+#endif /* !__powerpc64__ */
 #endif /*  __POWERPC_INTERRUPT_H_ */

@@ -369,10 +369,9 @@ aim_cpu_init(vm_offset_t toc)
 	bcopy(&hypertrapcode, (void *)(EXC_HEA + trap_offset), trapsize);
 	bcopy(&hypertrapcode, (void *)(EXC_HMI + trap_offset), trapsize);
 	bcopy(&hvi_trapcode, (void *)(EXC_HVI + trap_offset), trapsize);
-	#endif
-	trapsize = (size_t)exi_trapcodeend - (size_t)&exi_trapcode;
 	bcopy(&exi_trapcode, (void *)(EXC_EXI + trap_offset), trapsize);
 	bcopy(&decr_trapcode, (void *)(EXC_DECR + trap_offset), trapsize);
+	#endif
 	bcopy(&rstcode, (void *)(EXC_RST + trap_offset), (size_t)&rstcodeend -
 	    (size_t)&rstcode);
 
