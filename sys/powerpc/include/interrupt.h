@@ -41,18 +41,12 @@ intr_disable(void)
 	register_t msr;
 	int intr_flags;
 	struct pcpu *pcpupp;
-	struct thread_lite *td;
 
-	td = (struct thread_lite *)__curthread();
-	td->td_critnest++;
 	pcpupp = get_pcpu();
 	msr = mfmsr();
 	mtmsr(msr & ~PSL_EE);
 	intr_flags = pcpupp->pc_intr_flags;
-	if ((intr_flags & PPC_INTR_DISABLE) == 0)
-		pcpupp->pc_intr_flags |= PPC_INTR_DISABLE;
-	else
-		td->td_critnest--;
+	pcpupp->pc_intr_flags |= PPC_INTR_DISABLE;
 	
 	mtmsr(msr);
 	return (intr_flags);
@@ -69,10 +63,10 @@ intr_restore(register_t flags)
 	msr = mfmsr();
 	mtmsr(msr & ~PSL_EE);
 	pcpupp = get_pcpu();
-	if (__predict_false(pcpupp->pc_intr_flags & PPC_INTR_PEND))
+	if (__predict_false(pcpupp->pc_intr_flags & PPC_INTR_PEND)) {
 		delayed_interrupt();
+	}
 	pcpupp->pc_intr_flags &= ~PPC_INTR_DISABLE;
-	critical_exit();
 	mtmsr(msr);
 }
 #else
