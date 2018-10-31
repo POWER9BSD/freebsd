@@ -810,6 +810,10 @@ generictrap:
 
 s_trap:
 	bf	17,k_trap		/* branch if PSL_PR is false */
+	lis	%r27, LPCR_HR@h
+	mfspr	%r1, SPR_LPCR
+	and.	%r27, %r1, %r27
+	beq+	k_trap
 	GET_CPUINFO(%r1)
 u_trap:
 	ld	%r1,PC_CURPCB(%r1)
