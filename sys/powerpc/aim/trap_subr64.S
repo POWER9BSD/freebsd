@@ -830,9 +830,15 @@ decrtrap:
 	addi	%r31, %r31, 1
 	stw	%r31, PC_PEND_DECR(%r1)
 	cmplwi	%r30, PPC_INTR_DISABLE
-	beq-	fastreturn
+	beq-	1f
 	li	%r30, EXC_DECR
 	b	generictrap_late
+
+1:	li	%r30, 1
+	sli	%r30, %r30, 31
+	addi	%r30, %r30, -1
+	mtdec	%r30
+	b fastreturn
 
 /*
  * restore lr, r1, r30, and r31
