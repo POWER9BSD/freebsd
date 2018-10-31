@@ -569,9 +569,9 @@ spinlock_enter(void)
 		HMT_medium_high();
 		td->td_md.md_spinlock_count = 1;
 		td->td_md.md_saved_msr = msr;
+		critical_enter();
 	} else
 		td->td_md.md_spinlock_count++;
-	critical_enter();
 }
 
 void
@@ -581,10 +581,10 @@ spinlock_exit(void)
 	register_t msr;
 
 	td = curthread;
-	critical_exit();
 	msr = td->td_md.md_saved_msr;
 	td->td_md.md_spinlock_count--;
 	if (td->td_md.md_spinlock_count == 0) {
+		critical_exit();
 		intr_restore(msr);
 		HMT_medium();
 	}
