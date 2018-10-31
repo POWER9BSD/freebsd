@@ -117,9 +117,9 @@ delayed_interrupt(void)
 	pend_exi = pend_hvi = pend_decr = 0;
 	while (pcpupp->pc_intr_flags & PPC_INTR_PEND) {
 		pcpupp->pc_intr_flags &= ~PPC_INTR_PEND;
-		pend_exi += pcpupp->pc_pend_exi;
-		pend_hvi += pcpupp->pc_pend_hvi;
-		pend_decr += pcpupp->pc_pend_decr;
+		pend_exi = pcpupp->pc_pend_exi;
+		pend_hvi = pcpupp->pc_pend_hvi;
+		pend_decr = pcpupp->pc_pend_decr;
 		pcpupp->pc_pend_exi = 0;
 		pcpupp->pc_pend_hvi = 0;
 		pcpupp->pc_pend_decr = 0;
@@ -130,7 +130,7 @@ delayed_interrupt(void)
 		if (pend_exi | pend_hvi)
 			PIC_DISPATCH(root_pic, NULL);
 		if (pend_decr)
-			decr_intr(NULL);
+			decr_intr(NULL, pend_decr);
 		mtmsr(msr);
 	}
 }
@@ -147,8 +147,10 @@ powerpc_interrupt(struct trapframe *framep)
 	struct thread *td;
 	struct trapframe *oldframe;
 	register_t msr;
-	uint32_t oldflags;
+	uint32_t oldflags, pend_decr;
+	struct pcpu *pcpupp;
 
+	pcpupp = get_pcpu();
 	td = curthread;
 	oldframe = td->td_intr_frame;
 	CTR2(KTR_INTR, "%s: EXC=%x", __func__, framep->exc);
@@ -167,8 +169,10 @@ powerpc_interrupt(struct trapframe *framep)
 		break;
 
 	case EXC_DECR:
+		pend_decr = pcpupp->pc_pend_decr;
+		pcpupp->pc_pend_decr = 0;
 		msr = save_context(td, framep, &oldflags);
-		decr_intr(framep);
+		decr_intr(framep, pend_decr);
 		restore_context(td, oldframe, msr, oldflags);
 #ifdef BOOKE
 		framep->srr1 &= ~PSL_WE;

@@ -110,7 +110,7 @@ static struct timecounter	decr_tc = {
  * Decrementer interrupt handler.
  */
 void
-decr_intr(struct trapframe *frame)
+decr_intr(struct trapframe *frame, uint32_t pend_ticks)
 {
 	struct decr_state *s = DPCPU_PTR(decr_state);
 	int		nticks = 0;
@@ -139,9 +139,10 @@ decr_intr(struct trapframe *frame)
 			val += s->div;
 			nticks++;
 		}
+		nticks += pend_ticks;
 		mtdec(val);
 	} else if (s->mode == 2) {
-		nticks = 1;
+		nticks = pend_ticks;
 		decr_et_stop(NULL);
 	} else if (s->mode == 0) {
 		/* Potemkin timer ran out without an event. Just reset it. */
