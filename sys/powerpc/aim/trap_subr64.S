@@ -794,56 +794,65 @@ disitrap:
 	std	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)	/* free r30-31 */
 	std	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
 	lwz	%r30, PC_INTR_FLAGS(%r1)
-	ori	%r30, %r30, PPC_INTR_PEND
-	stw	%r30, PC_INTR_FLAGS(%r1)
 .endm
 
 hvitrap:
 	SAVE_CONTEXT
 	andi.	%r30, %r30, PPC_INTR_DISABLE
-	/* note that an hvitrap was seen */
-	lwz	%r31, PC_PEND_HVI(%r1)
-	addi	%r31, %r31, 1
-	stw	%r31, PC_PEND_HVI(%r1)
-	bne-	fastreturn
+	bne-	1f
 	li	%r30, EXC_HVI
 	mfspr	%r31, SPR_HSRR0
 	mtsrr0	%r31
 	mfspr	%r31, SPR_HSRR1
 	mtsrr1	%r31
 	b	generictrap_late
+1:
+	/* note that an hvitrap was seen */
+	lwz	%r31, PC_PEND_HVI(%r1)
+	addi	%r31, %r31, 1
+	stw	%r31, PC_PEND_HVI(%r1)
+	ori	%r31, %r30, PPC_HVI_PEND
+	b	fastreturn
+
 exitrap:
 	SAVE_CONTEXT
 	andi.	%r30, %r30, PPC_INTR_DISABLE
+	bne-	1f
+	li	%r30, EXC_EXI
+	b	generictrap_late
+1:
 	/* note that an exitrap was seen */
 	lwz	%r31, PC_PEND_EXI(%r1)
 	addi	%r31, %r31, 1
 	stw	%r31, PC_PEND_EXI(%r1)
-	bne-	fastreturn
-	li	%r30, EXC_EXI
-	b	generictrap_late
+	ori	%r31, %r30, PPC_EXI_PEND
+	b	fastreturn
+
 decrtrap:
 	SAVE_CONTEXT
-	andi.	%r30, %r30, PPC_INTR_DISABLE|PPC_NMI_ENA|PPC_DECR_SAMPLE
+	andi.	%r31, %r30, PPC_INTR_DISABLE|PPC_NMI_ENA|PPC_DECR_SAMPLE
 	/* note that an decrtrap was seen */
-	lwz	%r31, PC_PEND_DECR(%r1)
-	addi	%r31, %r31, 1
-	stw	%r31, PC_PEND_DECR(%r1)
-	cmplwi	%r30, PPC_INTR_DISABLE
+	cmplwi	%r31, PPC_INTR_DISABLE
 	beq-	1f
 	li	%r30, EXC_DECR
 	b	generictrap_late
-
-1:	li	%r30, 1
+1:
+	lwz	%r31, PC_PEND_DECR(%r1)
+	addi	%r31, %r31, 1
+	stw	%r31, PC_PEND_DECR(%r1)
+	ori	%r31, %r30, PPC_DECR_PEND
+	/* reset decr */
+	li	%r30, 1
 	sli	%r30, %r30, 31
 	addi	%r30, %r30, -1
 	mtdec	%r30
-	b fastreturn
+	b	fastreturn
 
 /*
  * restore lr, r1, r30, and r31
  */
 fastreturn:
+	stw	%r31, PC_INTR_FLAGS(%r1)
 	ld	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)
 	ld	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
 	mfsprg2	%r1
