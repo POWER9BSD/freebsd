@@ -477,7 +477,8 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	 */
 	pmap_bootstrap(startkernel, endkernel);
 	if (bootverbose)
-		printf("enabling translation\n");
+		printf("enabling translation - offset: %p\n",
+			(caddr_t) (__startkernel - KERNBASE));
 	mtmsr(psl_kernset & ~PSL_EE);
 #ifdef __powerpc64__
 	link_elf_ireloc(kmdp);
