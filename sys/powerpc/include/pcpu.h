@@ -40,26 +40,29 @@ struct pmap;
 struct pvo_entry;
 #define	CPUSAVE_LEN	9
 
-#ifndef __powerpc64__
-#define PCPU_PPC_FIELDS							\
-	struct pmap	*pc_curpmap;		/* current pmap */
-#else
-#define PCPU_PPC_FIELDS
-#endif
+#ifdef __powerpc64__
+#define PCPU_AIM32_FIELDS
+#define PCPU_AIM64_FIELDS							\
+	uint32_t	pc_intr_flags;						\
+	uint32_t	pc_pend_exi;						\
+	uint32_t	pc_pend_decr;						\
+	uint32_t	pc_pend_hvi;
 
+#else
+#define PCPU_AIM32_FIELDS							\
+	struct pmap	*pc_curpmap;		/* current pmap */
+#define PCPU_AIM64_FIELDS
+#endif
 #define	PCPU_MD_COMMON_FIELDS					\
-	PCPU_PPC_FIELDS							\
 	struct thread	*pc_fputhread;		/* current fpu user */	\
 	struct thread	*pc_vecthread;		/* current vec user */  \
 	struct thread	*pc_htmthread;		/* current htm user */  \
+	PCPU_AIM32_FIELDS						\
 	uintptr_t	pc_hwref;					\
 	int		pc_bsp;						\
 	volatile int	pc_awake;					\
+	PCPU_AIM64_FIELDS						\
 	uint32_t	pc_ipimask;					\
-	uint32_t	pc_intr_flags __aligned(CACHE_LINE_SIZE);	\
-	uint32_t	pc_pend_exi;						\
-	uint32_t	pc_pend_decr;						\
-	uint32_t	pc_pend_hvi;						\
 	register_t	pc_tempsave[CPUSAVE_LEN];			\
 	register_t	pc_disisave[CPUSAVE_LEN];			\
 	register_t	pc_dbsave[CPUSAVE_LEN];				\
@@ -69,9 +72,9 @@ struct pvo_entry;
 #define PCPU_MD_AIM32_FIELDS						\
 	struct pvo_entry *qmap_pvo;					\
 	struct mtx	qmap_lock;					\
-	char		__pad[128];
+	char		__pad[132];
 
-#define PCPU_MD_AIM64_FIELDS					\
+#define PCPU_MD_AIM64_FIELDS				                \
 	struct slb	slb[64];					\
 	struct slb	**userslb;					\
 	register_t	slbsave[18];					\
