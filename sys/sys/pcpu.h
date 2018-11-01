@@ -222,7 +222,7 @@ extern struct pcpu *cpuid_to_pcpu[];
 #define UMA_PCPU_ALLOC_SIZE		PAGE_SIZE
 
 #ifdef CTASSERT
-#if defined(__i386__) || defined(__amd64__)
+#if defined(__i386__) || defined(__amd64__) || defined(__powerpc64__)
 /* Required for counters(9) to work on x86. */
 CTASSERT(sizeof(struct pcpu) == UMA_PCPU_ALLOC_SIZE);
 #else
