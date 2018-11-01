@@ -435,6 +435,42 @@ cpu_wakeup_handler:
 
 	rfid
 
+	.globl	CNAME(exi_trapcode),CNAME(exi_trapcodeend)
+	.p2align 3
+CNAME(exi_trapcode):
+	mtsprg1	%r1			/* save SP in SPRG1 */
+	mflr	%r1
+	mtsprg2 %r1			/* save LR in SPRG2 */
+	ld	%r1,TRAP_GENTRAP(0)
+	addi	%r1,%r1,(exitrap-generictrap)
+	mtlr	%r1
+	blrl				/* Branch to exitrap */
+	nop
+CNAME(exi_trapcodeend):
+	.globl	CNAME(hvi_trapcode),CNAME(hvi_trapcodeend)
+	.p2align 3
+CNAME(hvi_trapcode):
+	mtsprg1	%r1			/* save SP in SPRG1 */
+	mflr	%r1
+	mtsprg2 %r1			/* save LR in SPRG2 */
+	ld	%r1,TRAP_GENTRAP(0)
+	addi	%r1,%r1,(hvitrap-generictrap)
+	mtlr	%r1
+	blrl				/* Branch to hvitrap */
+	nop
+CNAME(hvi_trapcodeend):
+	.globl	CNAME(decr_trapcode),CNAME(decr_trapcodeend)
+	.p2align 3
+CNAME(decr_trapcode):
+	mtsprg1	%r1			/* save SP in SPRG1 */
+	mflr	%r1
+	mtsprg2	%r1			/* save LR in SPRG2 */
+	ld	%r1,TRAP_GENTRAP(0)
+	addi	%r1,%r1,(decrtrap-generictrap)
+	mtlr	%r1
+	blrl				/* Branch to decrtrap */
+	nop
+CNAME(decr_trapcodeend):
 /*
  * This code gets copied to all the trap vectors
  * (except ISI/DSI, ALI, and the interrupts). Has to fit in 8 instructions!
@@ -750,6 +786,68 @@ disitrap:
 	b	dbtrap
 #endif
 
+
+/*
+ * overlap state save with the work expected by k_trap
+ */
+.MACRO SAVE_CONTEXT
+	GET_CPUINFO(%r1)
+	std	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)	/* free r27-r29 */
+	std	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
+	std	%r29,(PC_TEMPSAVE+CPUSAVE_R29)(%r1)
+	lwz	%r27, PC_INTR_FLAGS(%r1)
+	mfcr	%r29				/* save CR */
+.endm
+
+.MACRO K_TRAP_SETUP traptype dohyper
+	std	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)
+	std	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
+	mfsprg2	%r28				/* load LR */
+
+	/* XXX */
+.if \dohyper == 1
+	mfspr	%r27, SPR_HSRR0
+	mtsrr0	%r27
+	mfspr	%r27, SPR_HSRR1
+	mtsrr1	%r27
+.endif
+	/* Test whether we already had PR set */
+	li	%r27, \traptype
+	mfsrr1	%r31
+	mtsprg3	%r27				/* save trap type to SPRG3 */
+	mtcr	%r31
+	bf	17, 10f
+	ld	%r1,PC_CURPCB(%r1)		/* reload pcb pointer for u_trap */
+	/* XXX	support SRS save restore */
+	b	k_trap
+10:	mfsprg1	%r1				/* reload stack pointer for k_trap */
+	b	k_trap
+.endm
+
+.MACRO FASTRETURN_SETUP pendoff pendflag
+	tweq	%r31, %r31
+	/* note that an exitrap was seen */
+	lwz	%r27, \pendoff(%r1)
+	addi	%r27, %r27, 1
+	stw	%r27, \pendoff(%r1)
+	ori	%r27, %r27, \pendflag
+	b	fastreturn
+.endm
+
+/*
+ * restore cr, lr, r1, and r27-r29
+ */
+fastreturn:
+	stw	%r27, PC_INTR_FLAGS(%r1)
+	mtcr	%r29
+	ld	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)
+	ld	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
+	ld	%r29,(PC_TEMPSAVE+CPUSAVE_R29)(%r1)
+	mfsprg2	%r1
+	mtlr	%r1
+	mfsprg1	%r1
+	rfid
+
 	/* XXX need stack probe here */
 realtrap:
 /* Test whether we already had PR set */
@@ -782,6 +880,38 @@ realtrap_overwrite:
  * SPRG2 - Original LR
  */
 
+hvitrap:
+	SAVE_CONTEXT
+	andi.	%r27, %r27, PPC_INTR_DISABLE
+	bne-	1f
+	K_TRAP_SETUP traptype=EXC_HVI dohyper=1
+1:
+	tweq	%r31, %r31
+	/* note that an hvitrap was seen */
+	FASTRETURN_SETUP pendoff=PC_PEND_HVI pendflag=PPC_HVI_PEND
+decrtrap:
+	SAVE_CONTEXT
+	andi.	%r27, %r27, PPC_INTR_DISABLE|PPC_NMI_ENA|PPC_DECR_SAMPLE
+	/* note that an decrtrap was seen */
+	cmplwi	%r27, PPC_INTR_DISABLE
+	beq-	1f
+	K_TRAP_SETUP traptype=EXC_DECR dohyper=0
+1:
+	tweq	%r31, %r31
+	b	1b
+	/* reset decr */
+	li	%r27, 1
+	sli	%r27, %r27, 31
+	addi	%r27, %r27, -1
+	mtdec	%r27
+	FASTRETURN_SETUP pendoff=PC_PEND_DECR pendflag=PPC_DECR_PEND
+exitrap:
+	SAVE_CONTEXT
+	andi.	%r27, %r27, PPC_INTR_DISABLE
+	bne-	1f
+	K_TRAP_SETUP traptype=EXC_EXI dohyper=0
+1:
+	FASTRETURN_SETUP pendoff=PC_PEND_EXI pendflag=PPC_EXI_PEND
 generichypertrap:
 	mtsprg3 %r1
 	mfspr	%r1, SPR_HSRR0
