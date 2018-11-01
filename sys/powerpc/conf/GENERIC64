@@ -237,3 +237,5 @@ device		snd_uaudio	# USB Audio
 
 options		VERBOSE_SYSINIT
 options		BOOTVERBOSE
+options		ZFS
+options		TMPFS
