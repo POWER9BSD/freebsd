@@ -151,6 +151,8 @@ ENTRY(cpu_switch)
 	
 .L2:
 	mr	%r3,%r14		/* restore old thread ptr */
+.globl	CNAME(cpu_switch_pmap_deactivate)
+cpu_switch_pmap_deactivate:
 	bl	pmap_deactivate	/* Deactivate the current pmap */
 	nop
 
