@@ -255,3 +255,5 @@ device		uinput			# install /dev/uinput cdev
 
 options		BOOTVERBOSE
 
+options		ZFS
+options		TMPFS
