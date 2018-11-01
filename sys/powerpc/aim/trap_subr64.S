@@ -444,8 +444,8 @@ CNAME(exi_trapcode):
 	ld	%r1,TRAP_GENTRAP(0)
 	addi	%r1,%r1,(exitrap-generictrap)
 	mtlr	%r1
+	li	%r1, 0xe0		/* How to get the vector from LR */
 	blrl				/* Branch to exitrap */
-	nop
 CNAME(exi_trapcodeend):
 	.globl	CNAME(hvi_trapcode),CNAME(hvi_trapcodeend)
 	.p2align 3
@@ -801,7 +801,6 @@ disitrap:
 	ld	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)
 	ld	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
 	mfsprg3	%r1
-	b	generictrap
 .endm
 
 hvitrap:
@@ -809,25 +808,14 @@ hvitrap:
 	andi.	%r1, %r1, PPC_INTR_DISABLE
 	bne-	1f
 	RESTORE_CONTEXT
+	b	generictrap
 1:
+	tweq	%r31, %r31
 	/* note that an hvitrap was seen */
 	lwz	%r31, PC_PEND_HVI(%r1)
 	addi	%r31, %r31, 1
 	stw	%r31, PC_PEND_HVI(%r1)
 	ori	%r31, %r30, PPC_HVI_PEND
-	b	fastreturn
-
-exitrap:
-	SAVE_CONTEXT
-	andi.	%r1, %r1, PPC_INTR_DISABLE
-	bne-	1f
-	RESTORE_CONTEXT
-1:
-	/* note that an exitrap was seen */
-	lwz	%r31, PC_PEND_EXI(%r1)
-	addi	%r31, %r31, 1
-	stw	%r31, PC_PEND_EXI(%r1)
-	ori	%r31, %r30, PPC_EXI_PEND
 	b	fastreturn
 
 /*
@@ -881,7 +869,9 @@ decrtrap:
 	cmplwi	%r1, PPC_INTR_DISABLE
 	beq-	1f
 	RESTORE_CONTEXT
+	b	generictrap
 1:
+	tweq	%r31, %r31
 	b	1b
 	lwz	%r31, PC_PEND_DECR(%r1)
 	addi	%r31, %r31, 1
@@ -892,6 +882,20 @@ decrtrap:
 	sli	%r30, %r30, 31
 	addi	%r30, %r30, -1
 	mtdec	%r30
+	b	fastreturn
+exitrap:
+	SAVE_CONTEXT
+	andi.	%r1, %r1, PPC_INTR_DISABLE
+	beq-	1f
+	RESTORE_CONTEXT
+	b	generictrap
+1:
+	tweq	%r31, %r31
+	/* note that an exitrap was seen */
+	lwz	%r31, PC_PEND_EXI(%r1)
+	addi	%r31, %r31, 1
+	stw	%r31, PC_PEND_EXI(%r1)
+	ori	%r31, %r30, PPC_EXI_PEND
 	b	fastreturn
 generichypertrap:
 	mtsprg3 %r1
