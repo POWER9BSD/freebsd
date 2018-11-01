@@ -138,31 +138,30 @@ __FBSDID("$FreeBSD$");
 #define	PHYSMAP_SIZE	(2 * (VM_PHYSSEG_MAX - 1))
 
 
-vm_paddr_t phys_avail[PHYSMAP_SIZE + 2];
-vm_paddr_t dump_avail[PHYSMAP_SIZE + 2];
+__read_mostly vm_paddr_t phys_avail[PHYSMAP_SIZE + 2];
+__read_mostly vm_paddr_t dump_avail[PHYSMAP_SIZE + 2];
 
 #ifdef __powerpc64__
-int disable_radix = 0;
+__read_mostly int disable_radix = 0;
 #else
-int disable_radix = 1;
+__read_mostly int disable_radix = 1;
 #endif
 
-int cold = 1;
+__read_mostly int cold = 1;
 #ifdef __powerpc64__
-int cacheline_size = 128;
+__read_mostly int cacheline_size = 128;
 #else
-int cacheline_size = 32;
+__read_mostly int cacheline_size = 32;
 #endif
-int hw_direct_map = 1;
+__read_mostly int hw_direct_map = 1;
 
 extern void *ap_pcpu;
-
-struct pcpu __pcpu[MAXCPU];
 static char init_kenv[2048];
+struct pcpu __pcpu[MAXCPU] __aligned(PAGE_SIZE);
 
 static struct trapframe frame0;
 
-char		machine[] = "powerpc";
+__read_mostly char		machine[] = "powerpc";
 SYSCTL_STRING(_hw, HW_MACHINE, machine, CTLFLAG_RD, machine, 0, "");
 
 static void	cpu_startup(void *);
@@ -174,18 +173,18 @@ SYSCTL_INT(_machdep, CPU_CACHELINE, cacheline_size,
 uintptr_t	powerpc_init(vm_offset_t, vm_offset_t, vm_offset_t, void *,
 		    uint32_t);
 
-long		Maxmem = 0;
-long		realmem = 0;
+__read_mostly long		Maxmem = 0;
+__read_mostly long		realmem = 0;
 
 /* Default MSR values set in the AIM/Book-E early startup code */
-register_t	psl_kernset;
-register_t	psl_userset;
-register_t	psl_userstatic;
+__read_mostly register_t	psl_kernset;
+__read_mostly register_t	psl_userset;
+__read_mostly register_t	psl_userstatic;
 #ifdef __powerpc64__
-register_t	psl_userset32;
+__read_mostly register_t	psl_userset32;
 #endif
 
-struct kva_md_info kmi;
+__read_mostly struct kva_md_info kmi;
 
 static void
 cpu_startup(void *dummy)
@@ -477,7 +476,8 @@ powerpc_init(vm_offset_t fdt, vm_offset_t toc, vm_offset_t ofentry, void *mdp,
 	 */
 	pmap_bootstrap(startkernel, endkernel);
 	if (bootverbose)
-		printf("enabling translation\n");
+		printf("enabling translation - offset: %p\n",
+			(caddr_t) (__startkernel - KERNBASE));
 	mtmsr(psl_kernset & ~PSL_EE);
 #ifdef __powerpc64__
 	link_elf_ireloc(kmdp);
@@ -611,6 +611,10 @@ DB_SHOW_COMMAND(spr, db_show_spr)
 	saved_sprno = sprno = (intptr_t) addr;
 	sprno = ((sprno & 0x3e0) >> 5) | ((sprno & 0x1f) << 5);
 	p = (uint32_t *)(void *)&get_spr;
+#if defined(_CALL_ELF) && _CALL_ELF == 2
+	/* Account for function prologue. */
+	p += 2;
+#endif
 	*p = (*p & ~0x001ff800) | (sprno << 11);
 	__syncicache(get_spr, cacheline_size);
 	spr = get_spr(sprno);

@@ -1814,7 +1814,7 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	/*
 	 * Allocate virtual address space for the dynamic percpu area.
 	 */
-	pa = allocpages((msgbufsize + PAGE_MASK) >> PAGE_SHIFT);
+	pa = allocpages(DPCPU_SIZE >> PAGE_SHIFT);
 	dpcpu = (void *)PHYS_TO_DMAP(pa);
 	dpcpu_init(dpcpu, curcpu);
 	for (i = 0; phys_avail[i + 2] != 0; i += 2) {
@@ -2077,17 +2077,18 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 		   cpu_switch_pmap_deactivate);
 	cpu_switch_pmap_deactivate = PPC_NOP;
 	__syncicache(&cpu_switch_pmap_deactivate, 0x80);
+	u_trap_overwrite = PPC_NOP;
+	__syncicache(&u_trap_overwrite, 0x80);
 	ast_frame_leave = PPC_NOP;
 	__syncicache(&ast_frame_leave, 0x80);
+#ifdef DDB_HOTPATCH
 	dbleave_frame_leave = PPC_NOP;
 	__syncicache(&dbleave_frame_leave, 0x80);
 	dbtrap_frame_leave = PPC_NOP;
 	__syncicache(&dbtrap_frame_leave, 0x80);
-
-	u_trap_overwrite = PPC_NOP;
-	__syncicache(&u_trap_overwrite, 0x80);
 	realtrap_overwrite = PPC_NOP;
 	__syncicache(&realtrap_overwrite, 0x80);
+#endif
 }
 
 VISIBILITY void
