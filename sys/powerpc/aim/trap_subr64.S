@@ -438,9 +438,9 @@ cpu_wakeup_handler:
 	.globl	CNAME(exi_trapcode),CNAME(exi_trapcodeend)
 	.p2align 3
 CNAME(exi_trapcode):
-	mtsprg1	%r1			/* save SP */
-	mflr	%r1			/* Save the old LR in r1 */
-	mtsprg2 %r1			/* And then in SPRG2 */
+	mtsprg1	%r1			/* save SP in SPRG1 */
+	mflr	%r1
+	mtsprg2 %r1			/* save LR in SPRG2 */
 	ld	%r1,TRAP_GENTRAP(0)
 	addi	%r1,%r1,(exitrap-generictrap)
 	mtlr	%r1
@@ -450,26 +450,26 @@ CNAME(exi_trapcodeend):
 	.globl	CNAME(hvi_trapcode),CNAME(hvi_trapcodeend)
 	.p2align 3
 CNAME(hvi_trapcode):
-	mtsprg1	%r1			/* save SP */
-	mflr	%r1			/* Save the old LR in r1 */
-	mtsprg2 %r1			/* And then in SPRG2 */
+	mtsprg1	%r1			/* save SP in SPRG1 */
+	mflr	%r1
+	mtsprg2 %r1			/* save LR in SPRG2 */
 	ld	%r1,TRAP_GENTRAP(0)
 	addi	%r1,%r1,(hvitrap-generictrap)
 	mtlr	%r1
+	li	%r1, 0xe0		/* How to get the vector from LR */
 	blrl				/* Branch to hvitrap */
-	nop
 CNAME(hvi_trapcodeend):
 	.globl	CNAME(decr_trapcode),CNAME(decr_trapcodeend)
 	.p2align 3
 CNAME(decr_trapcode):
-	mtsprg1	%r1			/* save SP */
-	mflr	%r1			/* Save the old LR in r1 */
-	mtsprg2	%r1			/* And then in SPRG2 */
+	mtsprg1	%r1			/* save SP in SPRG1 */
+	mflr	%r1
+	mtsprg2	%r1			/* save LR in SPRG2 */
 	ld	%r1,TRAP_GENTRAP(0)
 	addi	%r1,%r1,(decrtrap-generictrap)
 	mtlr	%r1
+	li	%r1, 0xe0		/* How to get the vector from LR */
 	blrl				/* Branch to decrtrap */
-	nop
 CNAME(decr_trapcodeend):
 /*
  * This code gets copied to all the trap vectors
@@ -789,21 +789,26 @@ disitrap:
 .MACRO SAVE_CONTEXT
 	mtsprg3 %r1
 	GET_CPUINFO(%r1)
-	std	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)	/* free r30-31 */
+	std	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)
 	std	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
-	lwz	%r30, PC_INTR_FLAGS(%r1)
+	mfcr	%r30
+	lwz	%r1, PC_INTR_FLAGS(%r1)
+.endm
+
+.MACRO RESTORE_CONTEXT
+	mtcr	%r30
+	GET_CPUINFO(%r1)
+	ld	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)
+	ld	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
+	mfsprg3	%r1
+	b	generictrap
 .endm
 
 hvitrap:
 	SAVE_CONTEXT
-	andi.	%r30, %r30, PPC_INTR_DISABLE
+	andi.	%r1, %r1, PPC_INTR_DISABLE
 	bne-	1f
-	li	%r30, EXC_HVI
-	mfspr	%r31, SPR_HSRR0
-	mtsrr0	%r31
-	mfspr	%r31, SPR_HSRR1
-	mtsrr1	%r31
-	b	generictrap_late
+	RESTORE_CONTEXT
 1:
 	/* note that an hvitrap was seen */
 	lwz	%r31, PC_PEND_HVI(%r1)
@@ -814,36 +819,15 @@ hvitrap:
 
 exitrap:
 	SAVE_CONTEXT
-	andi.	%r30, %r30, PPC_INTR_DISABLE
+	andi.	%r1, %r1, PPC_INTR_DISABLE
 	bne-	1f
-	li	%r30, EXC_EXI
-	b	generictrap_late
+	RESTORE_CONTEXT
 1:
 	/* note that an exitrap was seen */
 	lwz	%r31, PC_PEND_EXI(%r1)
 	addi	%r31, %r31, 1
 	stw	%r31, PC_PEND_EXI(%r1)
 	ori	%r31, %r30, PPC_EXI_PEND
-	b	fastreturn
-
-decrtrap:
-	SAVE_CONTEXT
-	andi.	%r31, %r30, PPC_INTR_DISABLE|PPC_NMI_ENA|PPC_DECR_SAMPLE
-	/* note that an decrtrap was seen */
-	cmplwi	%r31, PPC_INTR_DISABLE
-	beq-	1f
-	li	%r30, EXC_DECR
-	b	generictrap_late
-1:
-	lwz	%r31, PC_PEND_DECR(%r1)
-	addi	%r31, %r31, 1
-	stw	%r31, PC_PEND_DECR(%r1)
-	ori	%r31, %r30, PPC_DECR_PEND
-	/* reset decr */
-	li	%r30, 1
-	sli	%r30, %r30, 31
-	addi	%r30, %r30, -1
-	mtdec	%r30
 	b	fastreturn
 
 /*
@@ -890,6 +874,25 @@ realtrap_overwrite:
  * SPRG2 - Original LR
  */
 
+decrtrap:
+	SAVE_CONTEXT
+	andi.	%r1, %r1, PPC_INTR_DISABLE|PPC_NMI_ENA|PPC_DECR_SAMPLE
+	/* note that an decrtrap was seen */
+	cmplwi	%r1, PPC_INTR_DISABLE
+	beq-	1f
+	RESTORE_CONTEXT
+1:
+	b	1b
+	lwz	%r31, PC_PEND_DECR(%r1)
+	addi	%r31, %r31, 1
+	stw	%r31, PC_PEND_DECR(%r1)
+	ori	%r31, %r30, PPC_DECR_PEND
+	/* reset decr */
+	li	%r30, 1
+	sli	%r30, %r30, 31
+	addi	%r30, %r30, -1
+	mtdec	%r30
+	b	fastreturn
 generichypertrap:
 	mtsprg3 %r1
 	mfspr	%r1, SPR_HSRR0
@@ -904,9 +907,16 @@ generictrap:
 
 	/* Save interesting registers */
 	GET_CPUINFO(%r1)
-
+	std	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)	/* free r27-r31 */
+	std	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
+	std	%r29,(PC_TEMPSAVE+CPUSAVE_R29)(%r1)
 	std	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)
 	std	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
+	mfdar	%r30
+	std	%r30,(PC_TEMPSAVE+CPUSAVE_AIM_DAR)(%r1)
+	mfsprg1	%r1			/* restore SP, in case of branch */
+	mfsprg2	%r28			/* save LR */
+	mfcr	%r29			/* save CR */
 
 	/* Compute the exception vector from the link register */
 	mfsprg3 %r31
@@ -914,18 +924,7 @@ generictrap:
 	mflr	%r30
 	addi	%r30,%r30,-4 /* The branch instruction, not the next */
 	and	%r30,%r30,%r31
-generictrap_late:
 	mtsprg3	%r30
-
-	std	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)	/* free r27-29 */
-	std	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
-	std	%r29,(PC_TEMPSAVE+CPUSAVE_R29)(%r1)
-
-	mfdar	%r30
-	std	%r30,(PC_TEMPSAVE+CPUSAVE_AIM_DAR)(%r1)
-	mfsprg1	%r1			/* restore SP, in case of branch */
-	mfsprg2	%r28			/* save LR */
-	mfcr	%r29			/* save CR */
 
 	/* Test whether we already had PR set */
 	mfsrr1	%r31
