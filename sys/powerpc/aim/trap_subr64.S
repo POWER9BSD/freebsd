@@ -808,6 +808,8 @@ disitrap:
 	mfsrr1	%r31
 	mtsprg3	%r27				/* save trap type to SPRG3 */
 	mtcr	%r31
+
+	/* XXX */
 .if \dohyper == 1
 	mfspr	%r27, SPR_HSRR0
 	mtsrr0	%r27
@@ -906,7 +908,7 @@ decrtrap:
 exitrap:
 	SAVE_CONTEXT
 	andi.	%r27, %r27, PPC_INTR_DISABLE
-	beq-	1f
+	bne-	1f
 	K_TRAP_SETUP traptype=EXC_EXI dohyper=0
 1:
 	FASTRETURN_SETUP pendoff=PC_PEND_EXI pendflag=PPC_EXI_PEND
