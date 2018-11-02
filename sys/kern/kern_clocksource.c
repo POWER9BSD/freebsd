@@ -798,6 +798,8 @@ cpu_activeclock(void)
 	struct thread *td;
 
 	state = DPCPU_PTR(timerstate);
+	KASSERT((uintptr_t)state > DMAP_MIN_ADDRESS,
+			("bad address state=%p", state));
 	if (state->idle == 0 || busy)
 		return;
 	if (periodic)
