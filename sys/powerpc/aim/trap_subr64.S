@@ -803,11 +803,6 @@ disitrap:
 	std	%r30,(PC_TEMPSAVE+CPUSAVE_R30)(%r1)
 	std	%r31,(PC_TEMPSAVE+CPUSAVE_R31)(%r1)
 	mfsprg2	%r28				/* load LR */
-	/* Test whether we already had PR set */
-	li	%r27, \traptype
-	mfsrr1	%r31
-	mtsprg3	%r27				/* save trap type to SPRG3 */
-	mtcr	%r31
 
 	/* XXX */
 .if \dohyper == 1
@@ -816,6 +811,11 @@ disitrap:
 	mfspr	%r27, SPR_HSRR1
 	mtsrr1	%r27
 .endif
+	/* Test whether we already had PR set */
+	li	%r27, \traptype
+	mfsrr1	%r31
+	mtsprg3	%r27				/* save trap type to SPRG3 */
+	mtcr	%r31
 	bf	17, 10f
 	ld	%r1,PC_CURPCB(%r1)		/* reload pcb pointer for u_trap */
 	/* XXX	support SRS save restore */
