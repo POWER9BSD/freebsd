@@ -12,8 +12,11 @@
 #ifdef _KERNEL
 
 struct trapframe;
-
+#ifdef __powerpc64__
+void	decr_intr(struct trapframe *, int64_t);
+#else
 void	decr_intr(struct trapframe *);
+#endif
 
 #endif
 
