@@ -68,6 +68,12 @@
 
 #include "pic_if.h"
 
+#ifdef BOOKE
+#define BOOKE_CLEAR_WE(framep) (framep)->srr1 &= ~PSL_WE
+#else
+#define BOOKE_CLEAR_WE(framep)
+#endif
+
 /*
  * A very short dispatch, to try and maximise assembler code use
  * between all exception types. Maybe 'true' interrupts should go
@@ -79,9 +85,7 @@ powerpc_interrupt(struct trapframe *framep)
 	struct thread *td;
 	struct trapframe *oldframe;
 	register_t ee;
-
 	td = curthread;
-
 	CTR2(KTR_INTR, "%s: EXC=%x", __func__, framep->exc);
 
 	switch (framep->exc) {
@@ -90,23 +94,29 @@ powerpc_interrupt(struct trapframe *framep)
 		critical_enter();
 		PIC_DISPATCH(root_pic, framep);
 		critical_exit();
-#ifdef BOOKE
-		framep->srr1 &= ~PSL_WE;
-#endif
+		BOOKE_CLEAR_WE(framep);
 		break;
 
-	case EXC_DECR:
+	case EXC_DECR: {
 		critical_enter();
 		atomic_add_int(&td->td_intr_nesting_level, 1);
 		oldframe = td->td_intr_frame;
 		td->td_intr_frame = framep;
+#ifdef __powerpc64__
+		struct pcpu *pc;
+		int64_t decrval;
+
+		pc = get_pcpu();
+		decrval = pc->pc_pend_decr_sum;
+		decr_intr(framep, decrval);
+#else
 		decr_intr(framep);
+#endif
 		td->td_intr_frame = oldframe;
 		atomic_subtract_int(&td->td_intr_nesting_level, 1);
 		critical_exit();
-#ifdef BOOKE
-		framep->srr1 &= ~PSL_WE;
-#endif
+		BOOKE_CLEAR_WE(framep);
+	}
 		break;
 #ifdef HWPMC_HOOKS
 	case EXC_PERF:

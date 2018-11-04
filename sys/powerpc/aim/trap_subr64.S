@@ -39,6 +39,7 @@
  *	#include <powerpc/aim/trap_subr.S>
  */
 
+#include <sys/limits.h>
 /* Locate the per-CPU data structure */
 #define GET_CPUINFO(r)  \
         mfsprg0  r
@@ -795,8 +796,12 @@ disitrap:
 	std	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)	/* free r27-r29 */
 	std	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
 	std	%r29,(PC_TEMPSAVE+CPUSAVE_R29)(%r1)
-	lwz	%r27, PC_INTR_FLAGS(%r1)
+	lbz	%r27, PC_INTR_FLAGS(%r1)
 	mfcr	%r29				/* save CR */
+	lwz	%r28, PC_NMI_FLAGS(%r1)
+	or	%r28, %r28, %r27
+	/* skip trap if INTR_DISABLE is set but NMI flags not set */
+	cmplwi	%r28, PPC_INTR_DISABLE
 .endm
 
 .MACRO K_TRAP_SETUP traptype dohyper
@@ -824,13 +829,13 @@ disitrap:
 	b	k_trap
 .endm
 
-.MACRO FASTRETURN_SETUP pendoff pendflag
-	tweq	%r31, %r31
-	/* note that an exitrap was seen */
-	lwz	%r27, \pendoff(%r1)
-	addi	%r27, %r27, 1
-	stw	%r27, \pendoff(%r1)
+/*
+ * check for NMI flags or restore context
+ */
+.MACRO FASTRETURN_SETUP pendflag
+	lbz	%r27, PC_INTR_PEND_FLAGS(%r1)
 	ori	%r27, %r27, \pendflag
+	stb	%r27, PC_INTR_PEND_FLAGS(%r1)
 	b	fastreturn
 .endm
 
@@ -838,7 +843,6 @@ disitrap:
  * restore cr, lr, r1, and r27-r29
  */
 fastreturn:
-	stw	%r27, PC_INTR_FLAGS(%r1)
 	mtcr	%r29
 	ld	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)
 	ld	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
@@ -870,6 +874,52 @@ realtrap_overwrite:
 	mr	%r28,%r27
 	b	s_trap
 
+
+/*
+ * after SAVE_CONTEXT:
+ * %r1 contains PCPU
+ * %r27 contains intr_flags
+ * %r28 scratch
+ * %r29 contains original CR
+ * CR contains result of checking for PPC_INTR_DISABLE
+ */
+hvitrap:
+	SAVE_CONTEXT
+	beq-	1f
+	K_TRAP_SETUP traptype=EXC_HVI dohyper=1
+1:
+	/* note that an hvitrap was seen */
+	FASTRETURN_SETUP pendflag=PPC_HVI_PEND
+decrtrap:
+	SAVE_CONTEXT
+	/*
+	 * - add residual from decr to PCPU(decr_total)
+	 * - increment PCPU(decr_pend) by 1
+	 * - reset decr to maximum (INT_MAX)
+	 */
+	mfdec	%r28
+	ld	%r27, PC_PEND_DECR_SUM(%r1)
+	add	%r28, %r28, %r27
+	ld	%r27, PC_INTR_DECR_TOTAL(%r1)
+	std	%r28, PC_PEND_DECR_SUM(%r1)
+	addi	%r28, %r27, 1
+	li	%r27, INT_MAX@l
+	lis	%r27, INT_MAX@h
+	std	%r28, PC_INTR_DECR_TOTAL(%r1)
+	mtdec	%r27
+	beq-	1f
+
+	K_TRAP_SETUP traptype=EXC_DECR dohyper=0
+1:
+	FASTRETURN_SETUP pendflag=PPC_DECR_PEND
+exitrap:
+	SAVE_CONTEXT
+	beq-	1f
+	K_TRAP_SETUP traptype=EXC_EXI dohyper=0
+1:
+	FASTRETURN_SETUP pendflag=PPC_EXI_PEND
+
+
 /*
  * generictrap does some standard setup for trap handling to minimize
  * the code that need be installed in the actual vectors. It expects
@@ -880,38 +930,6 @@ realtrap_overwrite:
  * SPRG2 - Original LR
  */
 
-hvitrap:
-	SAVE_CONTEXT
-	andi.	%r27, %r27, PPC_INTR_DISABLE
-	bne-	1f
-	K_TRAP_SETUP traptype=EXC_HVI dohyper=1
-1:
-	tweq	%r31, %r31
-	/* note that an hvitrap was seen */
-	FASTRETURN_SETUP pendoff=PC_PEND_HVI pendflag=PPC_HVI_PEND
-decrtrap:
-	SAVE_CONTEXT
-	andi.	%r27, %r27, PPC_INTR_DISABLE|PPC_NMI_ENA|PPC_DECR_SAMPLE
-	/* note that an decrtrap was seen */
-	cmplwi	%r27, PPC_INTR_DISABLE
-	beq-	1f
-	K_TRAP_SETUP traptype=EXC_DECR dohyper=0
-1:
-	tweq	%r31, %r31
-	b	1b
-	/* reset decr */
-	li	%r27, 1
-	sli	%r27, %r27, 31
-	addi	%r27, %r27, -1
-	mtdec	%r27
-	FASTRETURN_SETUP pendoff=PC_PEND_DECR pendflag=PPC_DECR_PEND
-exitrap:
-	SAVE_CONTEXT
-	andi.	%r27, %r27, PPC_INTR_DISABLE
-	bne-	1f
-	K_TRAP_SETUP traptype=EXC_EXI dohyper=0
-1:
-	FASTRETURN_SETUP pendoff=PC_PEND_EXI pendflag=PPC_EXI_PEND
 generichypertrap:
 	mtsprg3 %r1
 	mfspr	%r1, SPR_HSRR0
