@@ -41,13 +41,29 @@ struct pvo_entry;
 #define	CPUSAVE_LEN	9
 
 #ifdef __powerpc64__
+/*
+ * Key:
+ * intr_pend_flags: bits indicating which interrupts are pending
+ * intr_flags: soft interrupt handling state
+ * nmi_flags: flags settable by another CPU to force curcpu to
+ *     acknowledge a decrementer interrupt or IPI
+ * pend_decr_sum: the sum of the contents of decrementer - can
+ *     translate to the number of decrementer interrupts that
+ *     were missed while interrupts were disabled
+ * intr_decr_total: the number of decrementer interrupts that have
+ *     occurred on this cpu since boot - if this number does not
+ *     change after much more than a second, this CPU has likely
+ *     experienced a hard hang
+ */
+
 #define PCPU_AIM32_FIELDS
 #define PCPU_AIM64_FIELDS							\
-	uint32_t	pc_intr_flags;						\
-	uint32_t	pc_pend_exi;						\
-	uint32_t	pc_pend_decr;						\
-	uint32_t	pc_pend_hvi;
-
+	volatile uint8_t	pc_intr_pend_flags;				\
+	uint8_t	pc_intr_flags;							\
+	uint16_t	pc_intr_pad;						\
+	volatile uint32_t	pc_nmi_flags;					\
+	uint64_t	pc_pend_decr_sum;					\
+	uint64_t	pc_intr_decr_total;
 #else
 #define PCPU_AIM32_FIELDS							\
 	struct pmap	*pc_curpmap;		/* current pmap */
@@ -81,7 +97,7 @@ struct pvo_entry;
 	uint8_t		slbstack[1024];				\
 	struct pvo_entry *qmap_pvo;					\
 	struct mtx	qmap_lock;					\
-	char		__pad[1345];
+	char		__pad[1337];
 
 #ifdef __powerpc64__
 #define PCPU_MD_AIM_FIELDS	PCPU_MD_AIM64_FIELDS

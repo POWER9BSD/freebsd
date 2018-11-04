@@ -105,7 +105,47 @@ static struct timecounter	decr_tc = {
 	0,			/* frequency */
 	"timebase"		/* name */
 };
+#ifdef __powerpc64__
+/*
+ * Decrementer interrupt handler.
+ */
+void
+decr_intr(struct trapframe *frame, int64_t decrval)
+{
+	struct decr_state *s = DPCPU_PTR(decr_state);
+	int		nticks = 0;
+	int32_t	val;
 
+	if (!initialized)
+		return;
+
+	(*decr_counts[curcpu])++;
+	if (s->mode == 1) {
+		/*
+		 * Based on the actual time delay since the last decrementer
+		 * reload, we arrange for earlier interrupt next time.
+		 */
+		while (decrval < 0) {
+			decrval += s->div;
+			nticks++;
+		}
+		val = decrval;
+		mtdec(val);
+	} else {
+		if (s->mode == 2)
+			nticks = 1;
+		/*
+		 * We've already done the moral equivalent to decr_stop
+		 * in the fast trap handler
+		 */
+		s->mode = 0;
+	}
+	while (nticks-- > 0) {
+		if (decr_et.et_active)
+			decr_et.et_event_cb(&decr_et, decr_et.et_arg);
+	}
+}
+#else
 /*
  * Decrementer interrupt handler.
  */
@@ -114,7 +154,7 @@ decr_intr(struct trapframe *frame)
 {
 	struct decr_state *s = DPCPU_PTR(decr_state);
 	int		nticks = 0;
-	int32_t		val;
+	int32_t	val;
 
 	if (!initialized)
 		return;
@@ -153,6 +193,7 @@ decr_intr(struct trapframe *frame)
 			decr_et.et_event_cb(&decr_et, decr_et.et_arg);
 	}
 }
+#endif /* XXX */
 
 void
 cpu_initclocks(void)
