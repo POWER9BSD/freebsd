@@ -592,10 +592,15 @@ intr_restore_soft(register_t flags)
 	td = curthread;
 	msr = intr_disable_hard();
 	pc = get_pcpu();
-	if (__predict_false(pc->pc_intr_pend_flags & PPC_PEND_MASK))
+	if (__predict_false(pc->pc_intr_pend_flags & PPC_PEND_MASK)) {
+		td->td_md.md_spinlock_count++;
 		delayed_interrupt(NULL);
+		td->td_md.md_spinlock_count--;
+	}
 	pc->pc_intr_flags &= ~PPC_INTR_DISABLE;
-	intr_restore_hard(msr);
+	/* force interrupts back on */
+	if (!cold)
+		mtmsr(msr | PSL_EE);
 	if (__predict_false(td->td_owepreempt))
 		critical_exit_preempt();
 }
@@ -633,8 +638,8 @@ spinlock_exit(void)
 		critical_exit();
 		intr_restore_soft(flags);
 		HMT_medium(); /* Set normal thread priority */
-	}
-	intr_restore_hard(msr);
+	} else
+		intr_restore_hard(msr);
 }
 
 /*

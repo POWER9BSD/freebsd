@@ -81,40 +81,46 @@
  */
 #ifdef __powerpc64__
 static __inline register_t
-save_context(struct thread *td, struct trapframe *newframe)
+save_context(struct thread *td, struct trapframe *newframe, bool softnmi)
 {
 	uint32_t flags;
 	uint64_t msr;
 
 	td->td_critnest++;
 	td->td_intr_nesting_level++;
-	flags = PCPU_GET(intr_flags);
-	MPASS((flags & PPC_INTR_DISABLE) == 0);
 	td->td_intr_frame = newframe;
-	msr = mfmsr();
-	/*
-	 * Soft disable interrupts before hard enabling
-	 */
-	PCPU_SET(intr_flags, flags | PPC_INTR_DISABLE);
-	mtmsr(msr | PSL_EE);
+	if (softnmi) {
+		flags = PCPU_GET(intr_flags);
+		MPASS((flags & PPC_INTR_DISABLE) == 0);
+		msr = mfmsr();
+		/*
+		 * Soft disable interrupts before hard enabling
+		 */
+		PCPU_SET(intr_flags, flags | PPC_INTR_DISABLE);
+		mtmsr(msr | PSL_EE);
+	}
 	return (msr);
 }
 
 static __inline void
-restore_context(struct thread *td, struct trapframe *oldframe, register_t msr)
+restore_context(struct thread *td, struct trapframe *oldframe, register_t msr,
+			   bool softnmi)
 {
 	uint32_t flags;
 	struct trapframe *framep;
 
-	mtmsr(msr);
+	if (softnmi)
+		mtmsr(msr);
 	framep = td->td_intr_frame;
 	td->td_intr_nesting_level--;
-	flags = PCPU_GET(intr_flags);
-	MPASS(flags & PPC_INTR_DISABLE);
-	if (PCPU_GET(intr_pend_flags) & PPC_PEND_MASK)
-		delayed_interrupt(framep);
-	else {
-		PCPU_SET(intr_flags, flags & ~PPC_INTR_DISABLE);
+	if (softnmi) {
+		flags = PCPU_GET(intr_flags);
+		MPASS(flags & PPC_INTR_DISABLE);
+		if (PCPU_GET(intr_pend_flags) & PPC_PEND_MASK)
+			delayed_interrupt(framep);
+		else {
+			PCPU_SET(intr_flags, flags & ~PPC_INTR_DISABLE);
+		}
 	}
 	/*
 	 * Clear soft disable of interrupts before return
@@ -134,10 +140,10 @@ delayed_interrupt(struct trapframe *framep)
 	struct thread *td;
 
 	td = curthread;
-	if (td->td_intr_nesting_level > 0)
-		return;
 	pc = get_pcpu();
 	MPASS(pc->pc_intr_flags & PPC_INTR_DISABLE);
+	if (td->td_intr_nesting_level > 0)
+		return;
 	msr = mfmsr();
 	td->td_intr_nesting_level++;
 	pintr_pend_flags = &pc->pc_intr_pend_flags;
@@ -167,12 +173,6 @@ delayed_interrupt(struct trapframe *framep)
 			*pintr_pend_flags &= ~PPC_DECR_PEND;
 			mtmsr(msr | PSL_EE);
 			decr_intr(framep, pend_decr_sum);
-			mtmsr(msr);
-		}
-		if (ipflags & (PPC_EXI_PEND|PPC_HVI_PEND)) {
-			*pintr_pend_flags &= ~(PPC_EXI_PEND|PPC_HVI_PEND);
-			mtmsr(msr | PSL_EE);
-			PIC_DISPATCH(root_pic, framep);
 			mtmsr(msr);
 		}
 	}
@@ -209,10 +209,10 @@ powerpc_interrupt(struct trapframe *framep)
 	case EXC_HVI:
 		MPASS((pc->pc_intr_flags & PPC_INTR_DISABLE) == 0);
 		pc->pc_intr_pend_flags &= ~(PPC_EXI_PEND|PPC_HVI_PEND);
-		msr = save_context(td, framep);
+		msr = save_context(td, framep, false);
 		PIC_DISPATCH(root_pic, framep);
 		BOOKE_CLEAR_WE(framep);
-		restore_context(td, oldframe, msr);
+		restore_context(td, oldframe, msr, false);
 		break;
 
 	case EXC_DECR:
@@ -220,10 +220,10 @@ powerpc_interrupt(struct trapframe *framep)
 		decrval = pc->pc_pend_decr_sum;
 		pc->pc_pend_decr_sum = 0;
 		pc->pc_intr_pend_flags &= ~PPC_DECR_PEND;
-		msr = save_context(td, framep);
+		msr = save_context(td, framep, true);
 		decr_intr(framep, decrval);
 		BOOKE_CLEAR_WE(framep);
-		restore_context(td, oldframe, msr);
+		restore_context(td, oldframe, msr, true);
 		break;
 #ifdef HWPMC_HOOKS
 	case EXC_PERF:
