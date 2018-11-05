@@ -151,15 +151,14 @@
 /*
  * intr_flags:
  */
-#define	PPC_INTR_DISABLE	0x001
+#define	PPC_INTR_ENABLE		0x001
 
 /*
  * intr_pend_flags
  */
 #define	PPC_DECR_PEND		0x001
-#define	PPC_HVI_PEND		0x002
-#define	PPC_EXI_PEND		0x004
-#define	PPC_PEND_MASK		(PPC_DECR_PEND|PPC_HVI_PEND|PPC_EXI_PEND)
+#define	PPC_DOOR_PEND		0x002
+#define	PPC_PEND_MASK		(PPC_DECR_PEND|PPC_DOOR_PEND)
 
 /*
  * nmi_flags

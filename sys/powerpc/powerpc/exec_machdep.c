@@ -978,7 +978,11 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 
 	/* Setup to release spin count in fork_exit(). */
 	td->td_md.md_spinlock_count = 1;
+#ifdef __powerpc64__
+	td->td_md.md_saved_msr = PPC_INTR_ENABLE;;
+#else
 	td->td_md.md_saved_msr = psl_kernset;
+#endif	
 }
 
 void

@@ -355,7 +355,7 @@ cpu_est_clockrate(int cpu_id, uint64_t *cps)
 
 	vers = mfpvr() >> 16;
 	msr = mfmsr();
-	mtmsr(msr & ~PSL_EE);
+	mtmsr_ee(msr & ~PSL_EE);
 
 	switch (vers) {
 		case MPC7450:
@@ -695,7 +695,9 @@ cpu_idle(int busy)
 #ifdef INVARIANTS
 	if ((mfmsr() & PSL_EE) != PSL_EE) {
 		struct thread *td = curthread;
-		printf("td msr %#lx\n", (u_long)td->td_md.md_saved_msr);
+		printf("td msr %#lx flag: %#x count: %d critnest:%d\n",
+			   (u_long)td->td_md.md_saved_msr,
+			   PCPU_GET(intr_flags), td->td_md.md_spinlock_count, td->td_critnest);
 		panic("ints disabled in idleproc!");
 	}
 #endif
@@ -754,15 +756,15 @@ cpu_idle_60x(sbintime_t sbt)
 }
 
 static void
-cpu_idle_booke(sbintime_t sbt)
+cpu_idle_booke(sbintime_t sbt __unused)
 {
+#ifdef BOOKE
 	register_t msr;
 	uint16_t vers;
 
 	msr = mfmsr();
 	vers = mfpvr() >> 16;
 
-#ifdef BOOKE
 	switch (vers) {
 	case FSL_E500mc:
 	case FSL_E5500:
@@ -812,7 +814,7 @@ cpu_idle_power9(sbintime_t sbt)
 	msr = mfmsr();
 
 	/* Suspend external interrupts until stop instruction completes. */
-	mtmsr(msr &  ~PSL_EE);
+	mtmsr_ee(msr &  ~PSL_EE);
 	/* Set the stop state to lowest latency, wake up to next instruction */
 	mtspr(SPR_PSSCR, 0);
 	/* "stop" instruction (PowerISA 3.0) */
@@ -821,7 +823,7 @@ cpu_idle_power9(sbintime_t sbt)
 	 * Re-enable external interrupts to capture the interrupt that caused
 	 * the wake up.
 	 */
-	mtmsr(msr);
+	mtmsr_ee(msr);
 	
 }
 #endif
