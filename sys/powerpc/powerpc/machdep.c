@@ -123,6 +123,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/trap.h>
 #include <machine/vmparam.h>
 #include <machine/ofw_machdep.h>
+#include <machine/trap.h>
 
 #include <ddb/ddb.h>
 
@@ -556,37 +557,100 @@ ptrace_set_pc(struct thread *td, unsigned long addr)
 	return (0);
 }
 
+static __inline register_t
+__intr_disable_soft(void)
+{
+	int intr_flags;
+	struct pcpu *pc;
+
+	pc = get_pcpu();
+	intr_flags = pc->pc_intr_flags;
+	pc->pc_intr_flags &= ~PPC_INTR_ENABLE;
+	return (intr_flags);
+}
+
+register_t
+intr_disable_soft(void)
+{
+	register_t intr_flags;
+	register_t msr;
+
+	msr = intr_disable_hard();
+	intr_flags = __intr_disable_soft();
+	intr_restore_hard(msr);
+	return (intr_flags);
+}
+
+void
+__intr_restore_soft(register_t flags)
+{
+	register_t msr;
+	struct pcpu *pc;
+	struct thread *td;
+
+	if (flags == 0)
+		return;
+	td = curthread;
+	msr = intr_disable_hard();
+	pc = get_pcpu();
+	if (__predict_false(pc->pc_intr_pend_flags & PPC_PEND_MASK)) {
+		td->td_md.md_spinlock_count++;
+		delayed_interrupt(NULL);
+		td->td_md.md_spinlock_count--;
+	}
+	pc->pc_intr_flags |= PPC_INTR_ENABLE;
+	/* force interrupts back on */
+	__compiler_membar();
+	mtmsr_ee(msr | PSL_EE);
+	__compiler_membar();
+
+	if (__predict_false(td->td_owepreempt) &&
+		/*
+		 * We need to check for this here
+		 * to avoid spuriously clearing it
+		 */
+		td->td_critnest == 0) {
+		/* We need to clear this to avoid recursion */
+		td->td_owepreempt = 0;
+		critical_exit_preempt();
+	}
+}
+
 void
 spinlock_enter(void)
 {
 	struct thread *td;
-	register_t msr;
+	register_t msr, flags;
 
+	msr = intr_disable_hard();
 	td = curthread;
 	if (td->td_md.md_spinlock_count == 0) {
-		__asm __volatile("or 2,2,2"); /* Set high thread priority */
-		msr = intr_disable();
+		HMT_medium_high(); /* Set high thread priority */
+		flags = __intr_disable_soft();
 		td->td_md.md_spinlock_count = 1;
-		td->td_md.md_saved_msr = msr;
+		td->td_md.md_saved_msr = flags;
+		critical_enter();
 	} else
 		td->td_md.md_spinlock_count++;
-	critical_enter();
+	intr_restore_hard(msr);
 }
 
 void
 spinlock_exit(void)
 {
 	struct thread *td;
-	register_t msr;
+	register_t msr, flags;
 
 	td = curthread;
-	critical_exit();
-	msr = td->td_md.md_saved_msr;
+	msr = intr_disable_hard();
 	td->td_md.md_spinlock_count--;
 	if (td->td_md.md_spinlock_count == 0) {
-		intr_restore(msr);
-		__asm __volatile("or 6,6,6"); /* Set normal thread priority */
-	}
+		flags = td->td_md.md_saved_msr;
+		critical_exit();
+		intr_restore_soft(flags);
+		HMT_medium(); /* Set normal thread priority */
+	} else
+		intr_restore_hard(msr);
 }
 
 /*

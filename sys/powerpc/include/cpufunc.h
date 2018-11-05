@@ -60,6 +60,13 @@ mtmsr(register_t value)
 	__asm __volatile ("mtmsr %0; isync" :: "r"(value));
 }
 
+static __inline void
+mtmsr_ee(register_t value)
+{
+
+	__asm __volatile ("mtmsr %0" :: "r"(value));
+}
+
 #ifdef __powerpc64__
 static __inline void
 mtmsrd(register_t value)
@@ -216,21 +223,59 @@ bsfq(uint64_t word)
 }
 
 static __inline register_t
-intr_disable(void)
+intr_disable_hard(void)
 {
 	register_t msr;
 
 	msr = mfmsr();
-	mtmsr(msr & ~PSL_EE);
+	mtmsr_ee(msr & ~PSL_EE);
 	return (msr);
+}
+
+static __inline void
+intr_restore_hard(register_t msr)
+{
+
+	mtmsr_ee(msr);
+}
+
+#ifdef __powerpc64__
+register_t intr_disable_soft(void);
+void __intr_restore_soft(register_t msr);
+
+static __inline void
+intr_restore_soft(register_t flags)
+{
+	if (flags == 0)
+		return;
+	__intr_restore_soft(flags);
+}
+
+static __inline register_t
+intr_disable(void)
+{
+	return (intr_disable_soft());
 }
 
 static __inline void
 intr_restore(register_t msr)
 {
-
-	mtmsr(msr);
+	intr_restore_soft(msr);
 }
+
+#else
+static __inline register_t
+intr_disable(void)
+{
+	return (intr_disable_hard());
+}
+
+static __inline void
+intr_restore(register_t msr)
+{
+	intr_restore_hard(msr);
+}
+#endif
 
 static __inline struct pcpu *
 get_pcpu(void)

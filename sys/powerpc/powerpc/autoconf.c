@@ -38,6 +38,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 
 #include <machine/intr_machdep.h>
+#include <machine/trap.h>
 
 #ifdef DEV_ISA
 extern void isa_probe_children(device_t dev);
@@ -89,7 +90,8 @@ configure_final(void *dummy)
 	powerpc_enable_intr();
 
 	/* Enable external interrupts. */
-	mtmsr(mfmsr() | PSL_EE);
+	PCPU_SET(intr_flags, PPC_INTR_ENABLE);
+	mtmsr_ee(mfmsr() | PSL_EE);
 
 	cninit_finish();
 	cold = 0;
