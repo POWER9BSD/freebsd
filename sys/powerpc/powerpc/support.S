@@ -57,23 +57,6 @@
 	nop
 .endm
 
-/* XXX
- * Note that %r12 is volatile and we can
- * probably get away with just reloading
- * the pcb in to %r7 - so we only really
- * need to be saving one register here.
- */
-.macro SAVETMPS
-	std	%r12, -8(%r1)
-	std	%r13, -16(%r1)
-	std	%r14, -24(%r1)
-.endm
-.macro LOADTMPS
-	ld	%r12, -8(%r1)
-	ld	%r13, -16(%r1)
-	ld	%r14, -24(%r1)
-.endm
-
 .macro VALIDATE_ADDR_COPY raddr
 	srdi  %r0, \raddr, 52
 	cmpwi %r0, 1
@@ -96,15 +79,6 @@
 	li %r0, COPYFAULT
 	ld  \rpcb, PC_CURPCB(%r9)
 	std %r0, PCB_ONFAULT(\rpcb)
-	SAVETMPS
-.endm
-
-.macro SET_COPYINSTRFAULT raddr rpcb
-	VALIDATE_ADDR_COPY \raddr
-	PCPU(%r9)
-	li %r0, COPINSTRYFAULT
-	ld  \rpcb, PC_CURPCB(%r9)
-	std %r0, PCB_ONFAULT(\rpcb)
 .endm
 
 .macro SET_FUSUFAULT raddr rpcb
@@ -116,6 +90,8 @@
 .endm
 
 .macro CLEAR_FAULT rpcb clobber
+	PCPU(%r9)
+	ld  \rpcb, PC_CURPCB(%r9)
 	li  %r0, 0
 	std %r0, PCB_ONFAULT(\rpcb)
 .if  	\clobber == 1
@@ -126,9 +102,8 @@
 /*
 
  *  bcopy(src, dst, len)
- *        %r6  %r4  %r5
+ *        %r3  %r4  %r5
  * 
- *  %r3 is preserved for return in some variants
  *  %r7 is the pcb pointer
  * 
  *  %r0 and %r8-%r10 are volatile
@@ -136,18 +111,18 @@
  * 	
  */
 
-#define	rs	%r6
+#define	rs	%r3
 #define	rd	%r4
 #define	rl	%r5
 
-#define	t1	%r14
-#define	t2	%r8
-#define	t3	%r9
-#define	t4	%r10
-#define	t5	%r0
+#define	t1	%r6
+#define	t2	%r7
+#define	t3	%r8
+#define	t4	%r9
+#define	t5	%r10
 #define	t6	%r11
 #define	t7	%r12
-#define	t8	%r13
+#define	t8	%r0
 
 #define Thresh	64	
 .text
@@ -289,7 +264,6 @@ ENTRY_RADIX(copyout)
 	bl bcopy_generic 
 	nop
 	CLEAR_FAULT rpcb=%r7 clobber=1
-	LOADTMPS
 	EPILOGUE
 
 ENTRY_RADIX(copyin)
@@ -298,7 +272,6 @@ ENTRY_RADIX(copyin)
 	bl bcopy_generic
 	nop
 	CLEAR_FAULT rpcb=%r7 clobber=1
-	LOADTMPS
 	EPILOGUE
 /*
  * copyinstr(const void *udaddr, void *kaddr, size_t len, size_t *done)
@@ -482,12 +455,6 @@ ENTRY(fusufault)
 	EPILOGUE
 
 ENTRY(copy_fault)
-	CLEAR_FAULT rpcb=%r7 clobber=0
-	li %r3, EFAULT
-	LOADTMPS
-	EPILOGUE
-
-ENTRY(copyinstr_fault)
 	CLEAR_FAULT rpcb=%r7 clobber=0
 	li %r3, EFAULT
 	EPILOGUE
