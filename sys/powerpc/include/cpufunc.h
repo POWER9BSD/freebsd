@@ -216,7 +216,7 @@ bsfq(uint64_t word)
 }
 
 static __inline register_t
-intr_disable(void)
+intr_disable_hard(void)
 {
 	register_t msr;
 
@@ -226,11 +226,22 @@ intr_disable(void)
 }
 
 static __inline void
-intr_restore(register_t msr)
+intr_restore_hard(register_t msr)
 {
 
 	mtmsr(msr);
 }
+
+#ifdef __powerpc64__
+register_t intr_disable_soft(void);
+void intr_restore_soft(register_t msr);
+
+#define intr_disable() intr_disable_soft()
+#define intr_restore(x) intr_restore_soft(x)
+#else
+#define intr_disable() intr_disable_hard()
+#define intr_restore(x) intr_restore_hard(x)
+#endif
 
 static __inline struct pcpu *
 get_pcpu(void)

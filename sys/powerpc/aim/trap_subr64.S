@@ -791,7 +791,7 @@ disitrap:
 /*
  * overlap state save with the work expected by k_trap
  */
-.MACRO SAVE_CONTEXT
+.MACRO SAVE_CONTEXT pendflag
 	GET_CPUINFO(%r1)
 	std	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)	/* free r27-r29 */
 	std	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
@@ -830,25 +830,18 @@ disitrap:
 .endm
 
 /*
- * check for NMI flags or restore context
- */
-.MACRO FASTRETURN_SETUP pendflag
-	lbz	%r27, PC_INTR_PEND_FLAGS(%r1)
-	ori	%r27, %r27, \pendflag
-	stb	%r27, PC_INTR_PEND_FLAGS(%r1)
-	b	fastreturn
-.endm
-
-/*
  * restore cr, lr, r1, and r27-r29
  */
 fastreturn:
+	lbz	%r28, PC_INTR_PEND_FLAGS(%r1)
+	or	%r27, %r27, %r28
+	stb	%r27, PC_INTR_PEND_FLAGS(%r1)
 	mtcr	%r29
+	mfsprg2	%r28
 	ld	%r27,(PC_TEMPSAVE+CPUSAVE_R27)(%r1)
+	mtlr	%r28
 	ld	%r28,(PC_TEMPSAVE+CPUSAVE_R28)(%r1)
 	ld	%r29,(PC_TEMPSAVE+CPUSAVE_R29)(%r1)
-	mfsprg2	%r1
-	mtlr	%r1
 	mfsprg1	%r1
 	rfid
 
@@ -878,18 +871,11 @@ realtrap_overwrite:
 /*
  * after SAVE_CONTEXT:
  * %r1 contains PCPU
- * %r27 contains intr_flags
+ * %r27 scratch
  * %r28 scratch
  * %r29 contains original CR
  * CR contains result of checking for PPC_INTR_DISABLE
  */
-hvitrap:
-	SAVE_CONTEXT
-	beq-	1f
-	K_TRAP_SETUP traptype=EXC_HVI dohyper=1
-1:
-	/* note that an hvitrap was seen */
-	FASTRETURN_SETUP pendflag=PPC_HVI_PEND
 decrtrap:
 	SAVE_CONTEXT
 	/*
@@ -907,18 +893,20 @@ decrtrap:
 	lis	%r27, INT_MAX@h
 	std	%r28, PC_INTR_DECR_TOTAL(%r1)
 	mtdec	%r27
-	beq-	1f
+	li	%r27, PPC_DECR_PEND
+	beq-	fastreturn
 
 	K_TRAP_SETUP traptype=EXC_DECR dohyper=0
-1:
-	FASTRETURN_SETUP pendflag=PPC_DECR_PEND
+hvitrap:
+	SAVE_CONTEXT
+	beq-	fastreturn
+	li	%r27, PPC_HVI_PEND
+	K_TRAP_SETUP traptype=EXC_HVI dohyper=1
 exitrap:
 	SAVE_CONTEXT
-	beq-	1f
+	beq-	fastreturn
+	li	%r27, PPC_EXI_PEND
 	K_TRAP_SETUP traptype=EXC_EXI dohyper=0
-1:
-	FASTRETURN_SETUP pendflag=PPC_EXI_PEND
-
 
 /*
  * generictrap does some standard setup for trap handling to minimize

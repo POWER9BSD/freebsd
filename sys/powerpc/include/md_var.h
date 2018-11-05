@@ -71,6 +71,7 @@ void	cpu_setup(u_int);
 struct	trapframe;
 struct	dumperinfo;
 void	powerpc_interrupt(struct trapframe *);
+void	delayed_interrupt(struct trapframe *);
 
 void	dump_add_page(vm_paddr_t);
 void	dump_drop_page(vm_paddr_t);

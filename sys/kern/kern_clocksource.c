@@ -164,7 +164,7 @@ handleevents(sbintime_t now, int fake)
 	CTR3(KTR_SPARE2, "handle at %d:  now  %d.%08x",
 	    curcpu, (int)(now >> 32), (u_int)(now & 0xffffffff));
 	done = 0;
-	if (fake) {
+	if (fake || curthread->td_intr_frame == NULL) {
 		frame = NULL;
 		usermode = 0;
 	} else {
@@ -212,7 +212,6 @@ handleevents(sbintime_t now, int fake)
 		state->nextcall = state->nextcallopt = SBT_MAX;
 		callout_process(now);
 	}
-
 	t = getnextcpuevent(0);
 	ET_HW_LOCK(state);
 	if (!busy) {
