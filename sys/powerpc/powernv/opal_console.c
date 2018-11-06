@@ -41,6 +41,8 @@ __FBSDID("$FreeBSD$");
 #include <vm/pmap.h>
 
 #include <machine/bus.h>
+#include <machine/platform.h>
+#include <machine/pmap.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
@@ -75,7 +77,7 @@ struct uart_opal_softc {
 #endif
 };
 
-static struct uart_opal_softc	*console_sc = NULL;
+struct uart_opal_softc	*opal_console_sc = NULL;
 static struct consdev *stdout_cp;
 
 enum {
@@ -248,8 +250,8 @@ uart_opal_cnprobe(struct consdev *cp)
 	    MTX_NOWITNESS);
 
 	cp->cn_pri = CN_NORMAL;
-	console_sc = &sc;
-	cp->cn_arg = console_sc;
+	opal_console_sc = &sc;
+	cp->cn_arg = opal_console_sc;
 	stdout_cp = cp;
 	return;
 	
@@ -272,15 +274,15 @@ uart_opal_attach(device_t dev)
 	mtx_init(&sc->sc_mtx, device_get_nameunit(dev), NULL,
 	    MTX_SPIN | MTX_QUIET | MTX_NOWITNESS);
 
-	if (console_sc != NULL && console_sc->vtermid == sc->vtermid) {
+	if (opal_console_sc != NULL && opal_console_sc->vtermid == sc->vtermid) {
 		device_printf(dev, "console\n");
-		device_set_softc(dev, console_sc);
-		sc = console_sc;
+		device_set_softc(dev, opal_console_sc);
+		sc = opal_console_sc;
 		sprintf(uart_opal_consdev.cn_name, "ttyu%r", unit);
 	}
 	sc->tp = tty_alloc(&uart_opal_tty_class, sc);
 
-	if (console_sc == sc)
+	if (opal_console_sc == sc)
 		tty_init_console(sc->tp, 0);
 
 	sc->dev = dev;
@@ -381,7 +383,7 @@ uart_opal_put(struct uart_opal_softc *sc, void *buffer, size_t bufsize)
 	uint16_t seqno;
 	uint64_t len;
 	char	cbuf[16];
-	int	err;
+	int	err __unused;
 	uint64_t olen = (uint64_t)&len;
 	uint64_t obuf = (uint64_t)cbuf;
 
@@ -419,6 +421,42 @@ uart_opal_put(struct uart_opal_softc *sc, void *buffer, size_t bufsize)
 #endif
 
 	return (len);
+}
+
+void
+uart_opal_console_put(void *buffer, size_t bufsize)
+{
+	struct uart_opal_softc *sc;
+	vm_paddr_t len_pa, buffer_pa;
+	uint64_t len;
+	char	cbuf[16];
+	int err __unused;
+	uint16_t seqno;
+
+	if (opal_console_sc == NULL || pmap_bootstrapped == 0)
+		return;
+
+	sc = opal_console_sc;
+	len_pa = pmap_kextract((vm_offset_t)&len);
+	if (sc->protocol == OPAL_RAW) {
+		len = bufsize;
+		buffer_pa = pmap_kextract((vm_offset_t)buffer);
+		err = opal_call(OPAL_CONSOLE_WRITE, sc->vtermid, len_pa, buffer_pa);
+	} else {
+		if (bufsize > 12)
+			bufsize = 12;
+		seqno = atomic_fetchadd_byte(&sc->outseqno, 1);
+		cbuf[0] = VS_DATA_PACKET_HEADER;
+		cbuf[1] = 4 + bufsize; /* total length */
+		cbuf[2] = (seqno >> 8) & 0xff;
+		cbuf[3] = seqno & 0xff;
+		memcpy(&cbuf[4], buffer, bufsize);
+		len = 4 + bufsize;
+		buffer_pa = pmap_kextract((vm_offset_t)buffer);
+
+		err = opal_call(OPAL_CONSOLE_WRITE, sc->vtermid, len_pa, buffer_pa);
+		len -= 4;
+	}
 }
 
 static int

@@ -68,5 +68,7 @@ void platform_sleep(void);
  * XXX better place for this?
  */
 extern void powernv_set_nmmu_ptcr(uint64_t ptcr);
+void uart_opal_console_put(void *buffer, size_t bufsize);
+
 
 #endif	/* _MACHINE_PLATFORM_H_ */
