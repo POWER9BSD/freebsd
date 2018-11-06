@@ -535,7 +535,7 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	if (!mtx_initialized(&ns->lock))
 		mtx_init(&ns->lock, "nvme ns lock", NULL, MTX_DEF);
 
-	status.done = 0;
+	atomic_store_rel_int(&status.done, FALSE);
 	nvme_ctrlr_cmd_identify_namespace(ctrlr, id, &ns->data,
 	    nvme_completion_poll_cb, &status);
 	while (!atomic_load_acq_int(&status.done))
