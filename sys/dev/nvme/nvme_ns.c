@@ -497,6 +497,7 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	struct make_dev_args                    md_args;
 	struct nvme_completion_poll_status	status;
 	int                                     res;
+	int					iter;
 	int					unit;
 	uint16_t				oncs;
 	uint8_t					dsm;
@@ -506,6 +507,7 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	ns->ctrlr = ctrlr;
 	ns->id = id;
 	ns->stripesize = 0;
+	iter = 0;
 
 	/*
 	 * Older Intel devices advertise in vendor specific space an alignment
@@ -535,11 +537,23 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	if (!mtx_initialized(&ns->lock))
 		mtx_init(&ns->lock, "nvme ns lock", NULL, MTX_DEF);
 
-	status.done = FALSE;
+	atomic_store_rel_int(&status.done, FALSE);
+	if (bootverbose)
+		printf("%s requesting to identify namespace\n",
+			   __func__);
 	nvme_ctrlr_cmd_identify_namespace(ctrlr, id, &ns->data,
 	    nvme_completion_poll_cb, &status);
-	while (status.done == FALSE)
-		DELAY(5);
+	if (bootverbose)
+		printf("%s starting nvme identify wait done=%d\n", __func__, status.done);
+	while (atomic_load_acq_int(&status.done) == FALSE) {
+		pause("nvme_ns", 1);
+		if (iter++ == 5000) {
+			printf("nvme identify failed after 5s done=%d\n", status.done);
+			return (ENXIO);
+		}
+	}
+	if (bootverbose && iter > 0)
+		printf("%s %d iterations elapsed\n", __func__, iter-1);
 	if (nvme_completion_is_error(&status.cpl)) {
 		nvme_printf(ctrlr, "nvme_identify_namespace failed\n");
 		return (ENXIO);

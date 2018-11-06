@@ -186,7 +186,7 @@ nvme_ns_dump(struct nvme_namespace *ns, void *virt, off_t offset, size_t len)
 		return (ENXIO);
 
 	i = 0;
-	while ((i++ < NVD_DUMP_TIMEOUT) && (status.done == FALSE)) {
+	while ((i++ < NVD_DUMP_TIMEOUT) && (atomic_load_acq_int(&status.done) == FALSE)) {
 		DELAY(5);
 		nvme_qpair_process_completions(req->qpair);
 	}
