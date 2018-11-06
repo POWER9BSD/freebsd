@@ -603,8 +603,10 @@ intr_restore_soft(register_t flags)
 	__compiler_membar();
 	mtmsr_ee(msr | PSL_EE);
 	__compiler_membar();
-	if (__predict_false(td->td_owepreempt))
+	if (__predict_false(td->td_owepreempt)) {
+		td->td_owepreempt = 0;
 		critical_exit_preempt();
+	}
 }
 
 void
