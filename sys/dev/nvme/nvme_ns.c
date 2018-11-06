@@ -497,6 +497,7 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	struct make_dev_args                    md_args;
 	struct nvme_completion_poll_status	status;
 	int                                     res;
+	int					iter;
 	int					unit;
 	uint16_t				oncs;
 	uint8_t					dsm;
@@ -506,6 +507,7 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	ns->ctrlr = ctrlr;
 	ns->id = id;
 	ns->stripesize = 0;
+	iter = 0;
 
 	/*
 	 * Older Intel devices advertise in vendor specific space an alignment
@@ -538,8 +540,15 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	status.done = FALSE;
 	nvme_ctrlr_cmd_identify_namespace(ctrlr, id, &ns->data,
 	    nvme_completion_poll_cb, &status);
-	while (status.done == FALSE)
+	mb();
+	while (status.done == FALSE) {
 		DELAY(5);
+		mb();
+		if (iter++ == 1000000) {
+			printf("nvme identify failed after 10s done=%d\n", status.done);
+			return (ENXIO);
+		}
+	}
 	if (nvme_completion_is_error(&status.cpl)) {
 		nvme_printf(ctrlr, "nvme_identify_namespace failed\n");
 		return (ENXIO);
