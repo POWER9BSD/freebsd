@@ -207,7 +207,7 @@ powerpc_interrupt(struct trapframe *framep)
 	 */
 	if (framep->exc == EXC_EXI)
 		uart_opal_console_put("exi ", 4);
-	if (framep->exc == EXC_EXI)
+	if (framep->exc == EXC_HVI)
 		uart_opal_console_put("hvi ", 4);
 	if ((decr_seen == 0) && (framep->exc == EXC_DECR)) {
 		printf("got decrementer interrupt\n");
