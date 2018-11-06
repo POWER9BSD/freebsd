@@ -123,6 +123,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/trap.h>
 #include <machine/vmparam.h>
 #include <machine/ofw_machdep.h>
+#include <machine/trap.h>
 
 #include <ddb/ddb.h>
 
@@ -564,7 +565,7 @@ __intr_disable_soft(void)
 
 	pc = get_pcpu();
 	intr_flags = pc->pc_intr_flags;
-	pc->pc_intr_flags |= PPC_INTR_DISABLE;
+	pc->pc_intr_flags &= ~PPC_INTR_ENABLE;
 	return (intr_flags);
 }
 
@@ -587,7 +588,7 @@ intr_restore_soft(register_t flags)
 	struct pcpu *pc;
 	struct thread *td;
 
-	if (flags & PPC_INTR_DISABLE)
+	if (flags == 0)
 		return;
 	td = curthread;
 	msr = intr_disable_hard();
@@ -597,10 +598,11 @@ intr_restore_soft(register_t flags)
 		delayed_interrupt(NULL);
 		td->td_md.md_spinlock_count--;
 	}
-	pc->pc_intr_flags &= ~PPC_INTR_DISABLE;
+	pc->pc_intr_flags |= PPC_INTR_ENABLE;
 	/* force interrupts back on */
-	if (!cold)
-		mtmsr(msr | PSL_EE);
+	__compiler_membar();
+	mtmsr_ee(msr | PSL_EE);
+	__compiler_membar();
 	if (__predict_false(td->td_owepreempt))
 		critical_exit_preempt();
 }

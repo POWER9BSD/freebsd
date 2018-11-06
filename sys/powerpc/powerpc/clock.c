@@ -142,11 +142,9 @@ decr_intr(struct trapframe *frame, int64_t decrval)
 	}
 	while (nticks-- > 0) {
 		if (decr_et.et_active) {
-			MPASS(PCPU_GET(intr_flags));
+			MPASS(PCPU_GET(intr_flags) == 0);
 
 			decr_et.et_event_cb(&decr_et, decr_et.et_arg);
-			if (PCPU_GET(intr_flags) == 0)
-				panic("bad juju in %p\n", decr_et.et_event_cb);
 		}
 	}
 }

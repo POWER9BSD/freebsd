@@ -801,8 +801,8 @@ disitrap:
 	mfcr	%r29				/* save CR */
 	lwz	%r28, PC_NMI_FLAGS(%r1)
 	or	%r28, %r28, %r27
-	/* skip trap if INTR_DISABLE is set but NMI flags not set */
-	cmplwi	%r28, PPC_INTR_DISABLE
+	/* skip trap if INTR_ENABLE and NMI flags not set */
+	cmplwi	%r28, 0
 .endm
 
 .MACRO K_TRAP_SETUP 
@@ -878,7 +878,7 @@ realtrap_overwrite:
  * %r27 scratch
  * %r28 scratch
  * %r29 contains original CR
- * CR contains result of checking for PPC_INTR_DISABLE
+ * CR contains result of checking for PPC_INTR_ENABLE
  */
 decrtrap:
 	SAVE_CONTEXT

@@ -91,6 +91,7 @@
 #include <machine/frame.h>
 #include <machine/md_var.h>
 #include <machine/pcb.h>
+#include <machine/trap.h>
 
 #include <dev/ofw/openfirm.h>
 
@@ -168,7 +169,9 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	/* Setup to release spin count in fork_exit(). */
 	td2->td_md.md_spinlock_count = 1;
 	td2->td_md.md_saved_msr = 0;
-#ifndef __powerpc64__
+#ifdef __powerpc64__
+	td2->td_md.md_saved_msr = PPC_INTR_ENABLE;
+#else
 	td2->td_md.md_saved_msr = psl_kernset;
 #endif	
 	/*

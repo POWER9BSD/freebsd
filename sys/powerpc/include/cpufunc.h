@@ -60,6 +60,13 @@ mtmsr(register_t value)
 	__asm __volatile ("mtmsr %0; isync" :: "r"(value));
 }
 
+static __inline void
+mtmsr_ee(register_t value)
+{
+
+	__asm __volatile ("mtmsr %0" :: "r"(value));
+}
+
 #ifdef __powerpc64__
 static __inline void
 mtmsrd(register_t value)
@@ -221,7 +228,7 @@ intr_disable_hard(void)
 	register_t msr;
 
 	msr = mfmsr();
-	mtmsr(msr & ~PSL_EE);
+	mtmsr_ee(msr & ~PSL_EE);
 	return (msr);
 }
 
@@ -229,7 +236,7 @@ static __inline void
 intr_restore_hard(register_t msr)
 {
 
-	mtmsr(msr);
+	mtmsr_ee(msr);
 }
 
 #ifdef __powerpc64__
