@@ -582,7 +582,7 @@ intr_disable_soft(void)
 }
 
 void
-intr_restore_soft(register_t flags)
+__intr_restore_soft(register_t flags)
 {
 	register_t msr;
 	struct pcpu *pc;
