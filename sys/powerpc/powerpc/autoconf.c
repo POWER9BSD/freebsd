@@ -90,8 +90,8 @@ configure_final(void *dummy)
 	powerpc_enable_intr();
 
 	/* Enable external interrupts. */
-	mtmsr_ee(mfmsr() | PSL_EE);
 	PCPU_SET(intr_flags, PPC_INTR_ENABLE);
+	mtmsr_ee(mfmsr() | PSL_EE);
 
 	cninit_finish();
 	cold = 0;
