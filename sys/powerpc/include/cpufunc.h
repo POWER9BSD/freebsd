@@ -241,7 +241,16 @@ intr_restore_hard(register_t msr)
 
 #ifdef __powerpc64__
 register_t intr_disable_soft(void);
-void intr_restore_soft(register_t msr);
+void __intr_restore_soft(register_t msr);
+
+static __inline void
+intr_restore_soft(register_t flags)
+{
+	if (flags == 0)
+		return;
+	__intr_restore_soft(flags);
+}
+
 
 #define intr_disable() intr_disable_soft()
 #define intr_restore(x) intr_restore_soft(x)
