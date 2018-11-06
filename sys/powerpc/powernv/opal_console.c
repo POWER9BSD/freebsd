@@ -437,27 +437,24 @@ uart_opal_console_put(void *buffer, size_t bufsize)
 		return;
 
 	sc = opal_console_sc;
-	buffer_pa = pmap_kextract((vm_offset_t)buffer);
-	len = bufsize;
 	len_pa = pmap_kextract((vm_offset_t)&len);
 	if (sc->protocol == OPAL_RAW) {
+		len = bufsize;
+		buffer_pa = pmap_kextract((vm_offset_t)buffer);
 		err = opal_call(OPAL_CONSOLE_WRITE, sc->vtermid, len_pa, buffer_pa);
 	} else {
-		panic("XXX need special lock to avoid recursion");
-		uart_lock(&sc->sc_mtx);
 		if (bufsize > 12)
 			bufsize = 12;
-		seqno = sc->outseqno++;
+		seqno = atomic_fetchadd_byte(&sc->outseqno, 1);
 		cbuf[0] = VS_DATA_PACKET_HEADER;
 		cbuf[1] = 4 + bufsize; /* total length */
 		cbuf[2] = (seqno >> 8) & 0xff;
 		cbuf[3] = seqno & 0xff;
 		memcpy(&cbuf[4], buffer, bufsize);
 		len = 4 + bufsize;
+		buffer_pa = pmap_kextract((vm_offset_t)buffer);
 
 		err = opal_call(OPAL_CONSOLE_WRITE, sc->vtermid, len_pa, buffer_pa);
-		uart_unlock(&sc->sc_mtx);
-
 		len -= 4;
 	}
 }
