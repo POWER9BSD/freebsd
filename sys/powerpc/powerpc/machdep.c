@@ -566,6 +566,7 @@ __intr_disable_soft(void)
 	pc = get_pcpu();
 	intr_flags = pc->pc_intr_flags;
 	pc->pc_intr_flags &= ~PPC_INTR_ENABLE;
+	uart_opal_console_put("-0", 2);
 	return (intr_flags);
 }
 
@@ -588,8 +589,10 @@ intr_restore_soft(register_t flags)
 	struct pcpu *pc;
 	struct thread *td;
 
+	uart_opal_console_put("+0", 2);
 	if (flags == 0)
 		return;
+	uart_opal_console_put("+1", 2);
 	td = curthread;
 	msr = intr_disable_hard();
 	pc = get_pcpu();
@@ -605,6 +608,7 @@ intr_restore_soft(register_t flags)
 	__compiler_membar();
 	if (__predict_false(td->td_owepreempt))
 		critical_exit_preempt();
+	uart_opal_console_put("+2", 2);
 }
 
 void
@@ -612,7 +616,7 @@ spinlock_enter(void)
 {
 	struct thread *td;
 	register_t msr, flags;
-
+	uart_opal_console_put("#-0", 3);
 	msr = intr_disable_hard();
 	td = curthread;
 	if (td->td_md.md_spinlock_count == 0) {
@@ -624,6 +628,7 @@ spinlock_enter(void)
 	} else
 		td->td_md.md_spinlock_count++;
 	intr_restore_hard(msr);
+	uart_opal_console_put("#-1", 3);
 }
 
 void
@@ -631,7 +636,7 @@ spinlock_exit(void)
 {
 	struct thread *td;
 	register_t msr, flags;
-
+	uart_opal_console_put("#+0", 3);
 	td = curthread;
 	msr = intr_disable_hard();
 	td->td_md.md_spinlock_count--;
@@ -642,6 +647,7 @@ spinlock_exit(void)
 		HMT_medium(); /* Set normal thread priority */
 	} else
 		intr_restore_hard(msr);
+	uart_opal_console_put("#+1", 3);
 }
 
 /*
