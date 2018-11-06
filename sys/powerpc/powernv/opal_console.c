@@ -42,6 +42,7 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bus.h>
 #include <machine/platform.h>
+#include <machine/pmap.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
@@ -425,10 +426,41 @@ uart_opal_put(struct uart_opal_softc *sc, void *buffer, size_t bufsize)
 void
 uart_opal_console_put(void *buffer, size_t bufsize)
 {
-	if (opal_console_sc && pmap_bootstrapped)
-		uart_opal_put(opal_console_sc, buffer, bufsize);
-}
+	struct uart_opal_softc *sc;
+	vm_paddr_t len_pa, buffer_pa;
+	uint64_t len;
+	char	cbuf[16];
+	int err __unused;
+	uint16_t seqno;
 
+	if (opal_console_sc == NULL || pmap_bootstrapped == 0)
+		return;
+
+	sc = opal_console_sc;
+	buffer_pa = pmap_kextract((vm_offset_t)buffer);
+	len = bufsize;
+	len_pa = pmap_kextract((vm_offset_t)&len);
+	if (sc->protocol == OPAL_RAW) {
+		err = opal_call(OPAL_CONSOLE_WRITE, sc->vtermid, len_pa, buffer_pa);
+	} else {
+		panic("XXX need special lock to avoid recursion");
+		uart_lock(&sc->sc_mtx);
+		if (bufsize > 12)
+			bufsize = 12;
+		seqno = sc->outseqno++;
+		cbuf[0] = VS_DATA_PACKET_HEADER;
+		cbuf[1] = 4 + bufsize; /* total length */
+		cbuf[2] = (seqno >> 8) & 0xff;
+		cbuf[3] = seqno & 0xff;
+		memcpy(&cbuf[4], buffer, bufsize);
+		len = 4 + bufsize;
+
+		err = opal_call(OPAL_CONSOLE_WRITE, sc->vtermid, len_pa, buffer_pa);
+		uart_unlock(&sc->sc_mtx);
+
+		len -= 4;
+	}
+}
 
 static int
 uart_opal_cngetc(struct consdev *cp)
