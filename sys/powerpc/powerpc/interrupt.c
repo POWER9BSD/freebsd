@@ -65,6 +65,7 @@
 #include <machine/trap.h>
 #include <machine/spr.h>
 #include <machine/sr.h>
+#include <machine/platform.h>
 
 #include "pic_if.h"
 
@@ -89,16 +90,17 @@ save_context(struct thread *td, struct trapframe *newframe, bool softnmi)
 	td->td_critnest++;
 	td->td_intr_nesting_level++;
 	td->td_intr_frame = newframe;
+	flags = PCPU_GET(intr_flags);
+	MPASS(flags & PPC_INTR_ENABLE);
+	PCPU_SET(intr_flags, flags & ~PPC_INTR_ENABLE);
 	if (softnmi) {
-		flags = PCPU_GET(intr_flags);
-		MPASS(flags & PPC_INTR_ENABLE);
 		msr = mfmsr();
 		/*
 		 * Soft disable interrupts before hard enabling
 		 */
-		PCPU_SET(intr_flags, flags & ~PPC_INTR_ENABLE);
 		mtmsr_ee(msr | PSL_EE);
-	}
+	} else
+		td->td_md.md_spinlock_count++;
 	return (msr);
 }
 
@@ -113,15 +115,14 @@ restore_context(struct thread *td, struct trapframe *oldframe, register_t msr,
 		mtmsr_ee(msr);
 	framep = td->td_intr_frame;
 	td->td_intr_nesting_level--;
+	flags = PCPU_GET(intr_flags);
 	if (softnmi) {
-		flags = PCPU_GET(intr_flags);
 		MPASS((flags & PPC_INTR_ENABLE) == 0);
 		if (PCPU_GET(intr_pend_flags) & PPC_PEND_MASK)
 			delayed_interrupt(framep);
-		else {
-			PCPU_SET(intr_flags, flags | PPC_INTR_ENABLE);
-		}
-	}
+	} else
+		td->td_md.md_spinlock_count--;
+	PCPU_SET(intr_flags, flags | PPC_INTR_ENABLE);
 	/*
 	 * Clear soft disable of interrupts before return
 	 */
@@ -182,6 +183,8 @@ delayed_interrupt(struct trapframe *framep)
 	pc->pc_intr_flags |= PPC_INTR_ENABLE;
 }
 
+static int decr_seen;
+
 void
 powerpc_interrupt(struct trapframe *framep)
 {
@@ -196,14 +199,21 @@ powerpc_interrupt(struct trapframe *framep)
 	td = curthread;
 	oldframe = td->td_intr_frame;
 	critnest_enter = td->td_critnest;
+
+	td->td_md.md_spinlock_count++;
 	CTR2(KTR_INTR, "%s: EXC=%x", __func__, framep->exc);
 	/*
 	 * Are interrupts soft disabled? -- check for NMI
 	 */
-
-	/*
-	 * We only leave interrupts disabled for PMC
-	 */
+	if (framep->exc == EXC_EXI)
+		uart_opal_console_put("exi ", 4);
+	if (framep->exc == EXC_EXI)
+		uart_opal_console_put("hvi ", 4);
+	if ((decr_seen == 0) && (framep->exc == EXC_DECR)) {
+		printf("got decrementer interrupt\n");
+		decr_seen = 1;
+	}
+	td->td_md.md_spinlock_count--;
 	switch (framep->exc) {
 	case EXC_EXI:
 	case EXC_HVI:
