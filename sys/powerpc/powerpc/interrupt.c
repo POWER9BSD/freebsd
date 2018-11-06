@@ -206,13 +206,14 @@ powerpc_interrupt(struct trapframe *framep)
 	 * Are interrupts soft disabled? -- check for NMI
 	 */
 	if (framep->exc == EXC_EXI)
-		uart_opal_console_put("exi ", 4);
-	if (framep->exc == EXC_HVI)
-		uart_opal_console_put("hvi ", 4);
-	if ((decr_seen == 0) && (framep->exc == EXC_DECR)) {
+		uart_opal_console_put("exi+ ", 5);
+	else if (framep->exc == EXC_HVI)
+		uart_opal_console_put("hvi+ ", 5);
+	else if ((decr_seen == 0) && (framep->exc == EXC_DECR)) {
 		printf("got decrementer interrupt\n");
 		decr_seen = 1;
-	}
+	} else if (framep->exc != EXC_DECR)
+		uart_opal_console_put("+++ ", 4);
 	td->td_md.md_spinlock_count--;
 	switch (framep->exc) {
 	case EXC_EXI:
@@ -255,6 +256,13 @@ powerpc_interrupt(struct trapframe *framep)
 			mtmsr_ee(mfmsr() | PSL_EE);
 		trap(framep);
 	}
+	if (framep->exc == EXC_EXI)
+		uart_opal_console_put("exi- ", 5);
+	else if (framep->exc == EXC_HVI)
+		uart_opal_console_put("hvi- ", 5);
+	else if (framep->exc != EXC_DECR)
+		uart_opal_console_put("--- ", 4);
+
 }
 
 #else
