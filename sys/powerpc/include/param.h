@@ -133,8 +133,7 @@
 #define	USPACE		(kstack_pages * PAGE_SIZE)	/* total size of pcb */
 
 #define	COPYFAULT	0x1
-#define	COPYINSTRFAULT	0x2
-#define	FUSUFAULT	0x3
+#define	FUSUFAULT	0x2
 
 /*
  * Mach derived conversion macros
