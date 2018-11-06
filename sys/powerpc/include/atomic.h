@@ -560,6 +560,30 @@ atomic_store_rel_long(volatile u_long *addr, u_long val)
  * two values are equal, update the value of *p with newval. Returns
  * zero if the compare failed, nonzero otherwise.
  */
+
+static __inline uint8_t
+atomic_cmpset_byte(volatile uint8_t* p, uint8_t cmpval, uint8_t newval)
+{
+	uint8_t	ret;
+
+	__asm __volatile (
+		"1:\tlbarx %0, 0, %2\n\t"	/* load old value */
+		"cmplw %3, %0\n\t"		/* compare */
+		"bne 2f\n\t"			/* exit if not equal */
+		"stbcx. %4, 0, %2\n\t"      	/* attempt to store */
+		"bne- 1b\n\t"			/* spin if failed */
+		"li %0, 1\n\t"			/* success - retval = 1 */
+		"b 3f\n\t"			/* we've succeeded */
+		"2:\n\t"
+		"stbcx. %0, 0, %2\n\t"       	/* clear reservation (74xx) */
+		"li %0, 0\n\t"			/* failure - retval = 0 */
+		"3:\n\t"
+		: "=&r" (ret), "=m" (*p)
+		: "r" (p), "r" (cmpval), "r" (newval), "m" (*p)
+		: "cr0", "memory");
+
+	return (ret);
+}
 static __inline int
 atomic_cmpset_int(volatile u_int* p, u_int cmpval, u_int newval)
 {
@@ -788,6 +812,17 @@ atomic_fcmpset_rel_long(volatile u_long *p, u_long *cmpval, u_long newval)
 #define	atomic_fcmpset_acq_ptr	atomic_fcmpset_acq_int
 #define	atomic_fcmpset_rel_ptr	atomic_fcmpset_rel_int
 #endif
+
+static __inline uint8_t
+atomic_fetchadd_byte(volatile uint8_t *p, uint8_t v)
+{
+	uint8_t value;
+
+	do {
+		value = *p;
+	} while (!atomic_cmpset_byte(p, value, value + v));
+	return (value);
+}
 
 static __inline u_int
 atomic_fetchadd_int(volatile u_int *p, u_int v)
