@@ -540,10 +540,8 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	status.done = FALSE;
 	nvme_ctrlr_cmd_identify_namespace(ctrlr, id, &ns->data,
 	    nvme_completion_poll_cb, &status);
-	mb();
-	while (status.done == FALSE) {
+	while (atomic_load_acq_int(&status.done) == FALSE) {
 		DELAY(5);
-		mb();
 		if (iter++ == 1000000) {
 			printf("nvme identify failed after 10s done=%d\n", status.done);
 			return (ENXIO);
