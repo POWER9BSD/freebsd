@@ -537,13 +537,17 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	if (!mtx_initialized(&ns->lock))
 		mtx_init(&ns->lock, "nvme ns lock", NULL, MTX_DEF);
 
-	status.done = FALSE;
+	atomic_store_rel_int(&status.done, FALSE);
+	if (bootverbose)
+		printf("requesting to identify namespace\n");
 	nvme_ctrlr_cmd_identify_namespace(ctrlr, id, &ns->data,
 	    nvme_completion_poll_cb, &status);
+	if (bootverbose)
+		printf("starting nvme identify wait done=%d\n", status.done);
 	while (atomic_load_acq_int(&status.done) == FALSE) {
-		DELAY(5);
-		if (iter++ == 1000000) {
-			printf("nvme identify failed after 10s done=%d\n", status.done);
+		pause("nvme_ns", 1);
+		if (iter++ == 5000) {
+			printf("nvme identify failed after 5s done=%d\n", status.done);
 			return (ENXIO);
 		}
 	}
