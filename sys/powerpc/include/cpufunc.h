@@ -251,12 +251,30 @@ intr_restore_soft(register_t flags)
 	__intr_restore_soft(flags);
 }
 
+static __inline register_t
+intr_disable(void)
+{
+	return (intr_disable_soft());
+}
 
-#define intr_disable() intr_disable_soft()
-#define intr_restore(x) intr_restore_soft(x)
+static __inline void
+intr_restore(register_t msr)
+{
+	intr_restore_soft(msr);
+}
+
 #else
-#define intr_disable() intr_disable_hard()
-#define intr_restore(x) intr_restore_hard(x)
+static __inline register_t
+intr_disable(void)
+{
+	return (intr_disable_hard());
+}
+
+static __inline void
+intr_restore(register_t msr)
+{
+	intr_restore_hard(msr);
+}
 #endif
 
 static __inline struct pcpu *
