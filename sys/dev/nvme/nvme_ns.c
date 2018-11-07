@@ -552,7 +552,7 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 			return (ENXIO);
 		}
 	}
-	if (bootverbose)
+	if (bootverbose && iter > 0)
 		printf("%s %d iterations elapsed\n", __func__, iter-1);
 	if (nvme_completion_is_error(&status.cpl)) {
 		nvme_printf(ctrlr, "nvme_identify_namespace failed\n");
