@@ -603,7 +603,13 @@ __intr_restore_soft(register_t flags)
 	__compiler_membar();
 	mtmsr_ee(msr | PSL_EE);
 	__compiler_membar();
-	if (__predict_false(td->td_owepreempt)) {
+	if (__predict_false(td->td_owepreempt) &&
+		/*
+		 * We need to check for this here
+		 * to avoid spuriously clearing it
+		 */
+		td->td_critnest == 0) {
+		/* We need to clear this to avoid recursion */
 		td->td_owepreempt = 0;
 		critical_exit_preempt();
 	}
