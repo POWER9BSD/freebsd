@@ -539,11 +539,12 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 
 	atomic_store_rel_int(&status.done, FALSE);
 	if (bootverbose)
-		printf("requesting to identify namespace\n");
+		printf("%s requesting to identify namespace\n",
+			   __func__);
 	nvme_ctrlr_cmd_identify_namespace(ctrlr, id, &ns->data,
 	    nvme_completion_poll_cb, &status);
 	if (bootverbose)
-		printf("starting nvme identify wait done=%d\n", status.done);
+		printf("%s starting nvme identify wait done=%d\n", __func__, status.done);
 	while (atomic_load_acq_int(&status.done) == FALSE) {
 		pause("nvme_ns", 1);
 		if (iter++ == 5000) {
@@ -551,6 +552,8 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 			return (ENXIO);
 		}
 	}
+	if (bootverbose)
+		printf("%s %d iterations elapsed\n", __func__, iter-1);
 	if (nvme_completion_is_error(&status.cpl)) {
 		nvme_printf(ctrlr, "nvme_identify_namespace failed\n");
 		return (ENXIO);
