@@ -239,3 +239,5 @@ options		VERBOSE_SYSINIT
 options		BOOTVERBOSE
 options		ZFS
 options		TMPFS
+options		NUMA
+

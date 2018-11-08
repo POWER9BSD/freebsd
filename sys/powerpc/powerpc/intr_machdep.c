@@ -96,16 +96,17 @@ static MALLOC_DEFINE(M_INTR, "intr", "interrupt handler data");
 struct powerpc_intr {
 	struct intr_event *event;
 	long	*cntp;
-	u_int	irq;
 	device_t pic;
+	u_int	irq;
 	u_int	intline;
 	u_int	vector;
 	u_int	cntindex;
-	cpuset_t cpu;
-	enum intr_trigger trig;
-	enum intr_polarity pol;
 	int	fwcode;
 	int	ipi;
+	int pi_domain;
+	enum intr_trigger trig;
+	enum intr_polarity pol;
+	cpuset_t pi_cpuset;
 };
 
 struct pic {
@@ -197,7 +198,7 @@ smp_intr_init(void *dummy __unused)
 	for (vector = 0; vector < nvectors; vector++) {
 		i = powerpc_intrs[vector];
 		if (i != NULL && i->event != NULL && i->pic == root_pic)
-			PIC_BIND(i->pic, i->intline, i->cpu);
+			PIC_BIND(i->pic, i->intline, i->pi_cpuset);
 	}
 }
 SYSINIT(smp_intr_init, SI_SUB_SMP, SI_ORDER_ANY, smp_intr_init, NULL);
@@ -249,9 +250,9 @@ intr_lookup(u_int irq)
 	i->ipi = 0;
 
 #ifdef SMP
-	i->cpu = all_cpus;
+	i->pi_cpuset = all_cpus;
 #else
-	CPU_SETOF(0, &i->cpu);
+	CPU_SETOF(0, &i->pi_cpuset);
 #endif
 
 	for (vector = 0; vector < num_io_irqs && vector <= nvectors;
@@ -304,7 +305,6 @@ powerpc_map_irq(struct powerpc_intr *i)
 	/* Try a best guess if that failed */
 	if (i->pic == NULL)
 		i->pic = root_pic;
-
 	return (0);
 }
 
@@ -340,12 +340,12 @@ powerpc_assign_intr_cpu(void *arg, int cpu)
 	struct powerpc_intr *i = arg;
 
 	if (cpu == NOCPU)
-		i->cpu = all_cpus;
+		i->pi_cpuset = all_cpus;
 	else
-		CPU_SETOF(cpu, &i->cpu);
+		CPU_SETOF(cpu, &i->pi_cpuset);
 
 	if (!cold && i->pic != NULL && i->pic == root_pic)
-		PIC_BIND(i->pic, i->intline, i->cpu);
+		PIC_BIND(i->pic, i->intline, i->pi_cpuset);
 
 	return (0);
 #else
@@ -462,7 +462,8 @@ powerpc_enable_intr(void)
 			error = powerpc_setup_intr("IPI",
 			    MAP_IRQ(piclist[n].node, piclist[n].irqs),
 			    powerpc_ipi_handler, NULL, NULL,
-			    INTR_TYPE_MISC | INTR_EXCL, &ipi_cookie);
+			    INTR_TYPE_MISC | INTR_EXCL, &ipi_cookie,
+			    0 /* domain XXX */);
 			if (error) {
 				printf("unable to setup IPI handler\n");
 				return (error);
@@ -505,7 +506,8 @@ powerpc_enable_intr(void)
 
 int
 powerpc_setup_intr(const char *name, u_int irq, driver_filter_t filter,
-    driver_intr_t handler, void *arg, enum intr_type flags, void **cookiep)
+    driver_intr_t handler, void *arg, enum intr_type flags, void **cookiep,
+    int domain)
 {
 	struct powerpc_intr *i;
 	int error, enable = 0;
@@ -526,7 +528,13 @@ powerpc_setup_intr(const char *name, u_int irq, driver_filter_t filter,
 
 	error = intr_event_add_handler(i->event, name, filter, handler, arg,
 	    intr_priority(flags), flags, cookiep);
-
+	if (error)
+		return (error);
+	i->pi_domain = domain;
+	if (strcmp(name, "IPI") != 0)  {
+		CPU_ZERO(&i->pi_cpuset);
+		CPU_COPY(&cpuset_domain[domain], &i->pi_cpuset);
+	}
 	mtx_lock(&intr_table_lock);
 	intrcnt_setname(i->event->ie_fullname, i->cntindex);
 	mtx_unlock(&intr_table_lock);
@@ -544,7 +552,7 @@ powerpc_setup_intr(const char *name, u_int irq, driver_filter_t filter,
 				PIC_CONFIG(i->pic, i->intline, i->trig, i->pol);
 
 			if (i->pic == root_pic)
-				PIC_BIND(i->pic, i->intline, i->cpu);
+				PIC_BIND(i->pic, i->intline, i->pi_cpuset);
 
 			if (enable)
 				PIC_ENABLE(i->pic, i->intline, i->vector);
