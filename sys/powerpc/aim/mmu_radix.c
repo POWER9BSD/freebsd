@@ -317,10 +317,10 @@ static unsigned int isa3_base_pid;
 /*
  * Map of physical memory regions.
  */
-static struct	mem_region *regions;
-static struct	mem_region *pregions;
+static struct	mem_region *regions, *pregions;
+static struct	numa_mem_region *numa_pregions;
 static u_int	phys_avail_count;
-static int	regions_sz, pregions_sz;
+static int	regions_sz, pregions_sz, numapregions_sz;
 static struct pate *isa3_parttab;
 static struct prte *isa3_proctab;
 static vmem_t *asid_arena;
@@ -1463,6 +1463,7 @@ pmap_try_insert_pv_entry(pmap_t pmap, vm_offset_t va, vm_page_t m,
 }
 
 vm_paddr_t phys_avail_debug[2*VM_PHYSSEG_MAX];
+#ifdef INVARIANTS
 static void
 validate_addr(vm_paddr_t addr, vm_size_t size)
 {
@@ -1479,7 +1480,9 @@ validate_addr(vm_paddr_t addr, vm_size_t size)
 	KASSERT(found, ("%#lx-%#lx outside of initial phys_avail array",
 					addr, end));
 }
-
+#else
+static void validate_addr(vm_paddr_t addr, vm_size_t size) {}
+#endif
 #define DMAP_PAGE_BITS (RPTE_VALID | RPTE_LEAF | RPTE_EAA_MASK | PG_M | PG_A)
 
 static vm_paddr_t
@@ -1627,6 +1630,7 @@ mmu_radix_early_bootstrap(vm_offset_t start, vm_offset_t end)
 
 	if (2 * VM_PHYSSEG_MAX < regions_sz)
 		panic("mmu_radix_early_bootstrap: phys_avail too small");
+
 	if (bootverbose)
 		for (int i = 0; i < regions_sz; i++)
 			printf("regions[%d].mr_start=%lx regions[%d].mr_size=%lx\n",
@@ -1776,7 +1780,7 @@ mmu_radix_late_bootstrap(vm_offset_t start, vm_offset_t end)
 	 */
 	Maxmem = 0;
 	for (i = 0; phys_avail[i + 2] != 0; i += 2)
-		Maxmem = max(Maxmem, powerpc_btop(phys_avail[i + 1]));
+		Maxmem = MAX(Maxmem, powerpc_btop(phys_avail[i + 1]));
 
 	/*
 	 * Set the start and end of kva.
@@ -2065,6 +2069,7 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	mmu_radix_tlbiel_flush(TLB_INVAL_SCOPE_GLOBAL);
 
 	mmu_radix_late_bootstrap(start, end);
+	numa_mem_regions(&numa_pregions, &numapregions_sz);
 	if (bootverbose)
 		printf("%s done\n", __func__);
 	pmap_bootstrapped = 1;
@@ -2089,6 +2094,7 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	realtrap_overwrite = PPC_NOP;
 	__syncicache(&realtrap_overwrite, 0x80);
 #endif
+
 }
 
 VISIBILITY void
