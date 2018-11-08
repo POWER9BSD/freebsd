@@ -257,3 +257,5 @@ options		BOOTVERBOSE
 
 options		ZFS
 options		TMPFS
+options		NUMA
+

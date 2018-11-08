@@ -781,9 +781,11 @@ vm_page_startup(vm_offset_t vaddr)
 	 * Add physical memory segments corresponding to the available
 	 * physical pages.
 	 */
-	for (i = 0; phys_avail[i + 1] != 0; i += 2)
+	for (i = 0; phys_avail[i + 1] != 0; i += 2) {
+		if (phys_avail[i] == phys_avail[i + 1])
+			continue;
 		vm_phys_add_seg(phys_avail[i], phys_avail[i + 1]);
-
+	}
 	/*
 	 * Initialize the physical memory allocator.
 	 */
