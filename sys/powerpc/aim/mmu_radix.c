@@ -2078,8 +2078,6 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	 * patch
 	 */
 
-	printf("pmap_activate_address: %#x\n",
-		   cpu_switch_pmap_deactivate);
 	cpu_switch_pmap_deactivate = PPC_NOP;
 	__syncicache(&cpu_switch_pmap_deactivate, 0x80);
 	u_trap_overwrite = PPC_NOP;
@@ -4564,10 +4562,10 @@ mmu_radix_pmap_release(pmap_t pmap)
 	KASSERT(vm_radix_is_empty(&pmap->pm_root),
 	    ("pmap_release: pmap has reserved page table page(s)"));
 
+	pmap_invalidate_all(pmap);
+	isa3_proctab[pmap->pm_pid].proctab0 = 0;
 	uma_zfree(zone_radix_pgd, pmap->pm_pml1);
-	/*
-	 * XXX free pid
-	 */
+	vmem_free(asid_arena, pmap->pm_pid, 1);
 }
 
 /*
