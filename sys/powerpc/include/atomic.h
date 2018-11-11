@@ -569,7 +569,7 @@ atomic_cmpset_byte(volatile uint8_t* p, uint8_t cmpval, uint8_t newval)
 	__asm __volatile (
 		"1:\tlbarx %0, 0, %2\n\t"	/* load old value */
 		"cmplw %3, %0\n\t"		/* compare */
-		"bne 2f\n\t"			/* exit if not equal */
+		"bne- 2f\n\t"			/* exit if not equal */
 		"stbcx. %4, 0, %2\n\t"      	/* attempt to store */
 		"bne- 1b\n\t"			/* spin if failed */
 		"li %0, 1\n\t"			/* success - retval = 1 */
@@ -584,15 +584,16 @@ atomic_cmpset_byte(volatile uint8_t* p, uint8_t cmpval, uint8_t newval)
 
 	return (ret);
 }
+
 static __inline int
 atomic_cmpset_int(volatile u_int* p, u_int cmpval, u_int newval)
 {
-	int	ret;
+	int	prev;
 
 	__asm __volatile (
 		"1:\tlwarx %0, 0, %2\n\t"	/* load old value */
 		"cmplw %3, %0\n\t"		/* compare */
-		"bne 2f\n\t"			/* exit if not equal */
+		"bne- 2f\n\t"			/* exit if not equal */
 		"stwcx. %4, 0, %2\n\t"      	/* attempt to store */
 		"bne- 1b\n\t"			/* spin if failed */
 		"li %0, 1\n\t"			/* success - retval = 1 */
@@ -601,12 +602,13 @@ atomic_cmpset_int(volatile u_int* p, u_int cmpval, u_int newval)
 		"stwcx. %0, 0, %2\n\t"       	/* clear reservation (74xx) */
 		"li %0, 0\n\t"			/* failure - retval = 0 */
 		"3:\n\t"
-		: "=&r" (ret), "=m" (*p)
+		: "=&r" (prev), "=m" (*p)
 		: "r" (p), "r" (cmpval), "r" (newval), "m" (*p)
 		: "cr0", "memory");
 
-	return (ret);
+	return (prev);
 }
+
 static __inline int
 atomic_cmpset_long(volatile u_long* p, u_long cmpval, u_long newval)
 {
@@ -616,12 +618,12 @@ atomic_cmpset_long(volatile u_long* p, u_long cmpval, u_long newval)
 	    #ifdef __powerpc64__
 		"1:\tldarx %0, 0, %2\n\t"	/* load old value */
 		"cmpld %3, %0\n\t"		/* compare */
-		"bne 2f\n\t"			/* exit if not equal */
+		"bne- 2f\n\t"			/* exit if not equal */
 		"stdcx. %4, 0, %2\n\t"		/* attempt to store */
 	    #else
 		"1:\tlwarx %0, 0, %2\n\t"	/* load old value */
 		"cmplw %3, %0\n\t"		/* compare */
-		"bne 2f\n\t"			/* exit if not equal */
+		"bne- 2f\n\t"			/* exit if not equal */
 		"stwcx. %4, 0, %2\n\t"		/* attempt to store */
 	    #endif
 		"bne- 1b\n\t"			/* spin if failed */
@@ -700,6 +702,57 @@ atomic_cmpset_rel_long(volatile u_long *p, u_long cmpval, u_long newval)
  * zero if the compare failed and sets *cmpval to the read value from *p,
  * nonzero otherwise.
  */
+
+static __inline char
+atomic_fcmpset_byte(volatile u_char *p, u_char *cmpval, u_char newval)
+{
+	char	ret;
+
+	__asm __volatile (
+		"lbarx %0, 0, %3\n\t"	/* load old value */
+		"cmplw %4, %0\n\t"		/* compare */
+		"bne- 1f\n\t"			/* exit if not equal */
+		"stbcx. %5, 0, %3\n\t"      	/* attempt to store */
+		"bne- 1b\n\t"			/* exit if failed */
+		"li %0, 1\n\t"			/* success - retval = 1 */
+		"b 2f\n\t"			/* we've succeeded */
+		"1:\n\t"
+		"stbcx. %0, 0, %3\n\t"       	/* clear reservation (74xx) */
+		"stbx %0, 0, %7\n\t"
+		"li %0, 0\n\t"			/* failure - retval = 0 */
+		"2:\n\t"
+		: "=&r" (ret), "=m" (*p), "=m" (*cmpval)
+		: "r" (p), "r" (*cmpval), "r" (newval), "m" (*p), "r"(cmpval)
+		: "cr0", "memory");
+
+	return (ret);
+}
+
+static __inline short
+atomic_fcmpset_short(volatile u_short *p, u_short *cmpval, u_short newval)
+{
+	short	ret;
+
+	__asm __volatile (
+		"lharx %0, 0, %3\n\t"	/* load old value */
+		"cmplw %4, %0\n\t"		/* compare */
+		"bne- 1f\n\t"			/* exit if not equal */
+		"sthcx. %5, 0, %3\n\t"      	/* attempt to store */
+		"bne- 1f\n\t"			/* exit if failed */
+		"li %0, 1\n\t"			/* success - retval = 1 */
+		"b 2f\n\t"			/* we've succeeded */
+		"1:\n\t"
+		"sthcx. %0, 0, %3\n\t"       	/* clear reservation (74xx) */
+		"sthx %0, 0, %7\n\t"
+		"li %0, 0\n\t"			/* failure - retval = 0 */
+		"2:\n\t"
+		: "=&r" (ret), "=m" (*p), "=m" (*cmpval)
+		: "r" (p), "r" (*cmpval), "r" (newval), "m" (*p), "r"(cmpval)
+		: "cr0", "memory");
+
+	return (ret);
+}
+
 static __inline int
 atomic_fcmpset_int(volatile u_int *p, u_int *cmpval, u_int newval)
 {
@@ -708,7 +761,7 @@ atomic_fcmpset_int(volatile u_int *p, u_int *cmpval, u_int newval)
 	__asm __volatile (
 		"lwarx %0, 0, %3\n\t"	/* load old value */
 		"cmplw %4, %0\n\t"		/* compare */
-		"bne 1f\n\t"			/* exit if not equal */
+		"bne- 1f\n\t"			/* exit if not equal */
 		"stwcx. %5, 0, %3\n\t"      	/* attempt to store */
 		"bne- 1f\n\t"			/* exit if failed */
 		"li %0, 1\n\t"			/* success - retval = 1 */
@@ -724,6 +777,7 @@ atomic_fcmpset_int(volatile u_int *p, u_int *cmpval, u_int newval)
 
 	return (ret);
 }
+
 static __inline int
 atomic_fcmpset_long(volatile u_long *p, u_long *cmpval, u_long newval)
 {
@@ -733,12 +787,12 @@ atomic_fcmpset_long(volatile u_long *p, u_long *cmpval, u_long newval)
 	    #ifdef __powerpc64__
 		"ldarx %0, 0, %3\n\t"	/* load old value */
 		"cmpld %4, %0\n\t"		/* compare */
-		"bne 1f\n\t"			/* exit if not equal */
+		"bne- 1f\n\t"			/* exit if not equal */
 		"stdcx. %5, 0, %3\n\t"		/* attempt to store */
 	    #else
 		"lwarx %0, 0, %3\n\t"	/* load old value */
 		"cmplw %4, %0\n\t"		/* compare */
-		"bne 1f\n\t"			/* exit if not equal */
+		"bne- 1f\n\t"			/* exit if not equal */
 		"stwcx. %5, 0, %3\n\t"		/* attempt to store */
 	    #endif
 		"bne- 1f\n\t"			/* exit if failed */
