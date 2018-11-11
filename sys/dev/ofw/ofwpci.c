@@ -30,6 +30,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/module.h>
 #include <sys/bus.h>
+#include <sys/kdb.h>
 #include <sys/conf.h>
 #include <sys/kernel.h>
 #include <sys/rman.h>
@@ -76,6 +77,8 @@ static int ofw_pci_deactivate_resource(device_t, device_t, int, int,
     struct resource *);
 static int ofw_pci_adjust_resource(device_t, device_t, int,
     struct resource *, rman_res_t, rman_res_t);
+static int ofw_pci_translate_resource(device_t bus, int type,
+	rman_res_t start, rman_res_t *newstart);
 
 #ifdef __powerpc__
 static bus_space_tag_t ofw_pci_bus_get_bus_tag(device_t, device_t);
@@ -116,6 +119,7 @@ static device_method_t	ofw_pci_methods[] = {
 	DEVMETHOD(bus_activate_resource,	ofw_pci_activate_resource),
 	DEVMETHOD(bus_deactivate_resource,	ofw_pci_deactivate_resource),
 	DEVMETHOD(bus_adjust_resource,	ofw_pci_adjust_resource),
+	DEVMETHOD(bus_translate_resource,	ofw_pci_translate_resource),
 #ifdef __powerpc__
 	DEVMETHOD(bus_get_bus_tag,	ofw_pci_bus_get_bus_tag),
 #endif
@@ -406,11 +410,13 @@ ofw_pci_alloc_resource(device_t bus, device_t child, int type, int *rid,
 	struct rman *rm;
 	int needactivate;
 
-
 	needactivate = flags & RF_ACTIVE;
 	flags &= ~RF_ACTIVE;
 
 	sc = device_get_softc(bus);
+	device_printf(bus, "%s(%s, %d, %p, %#lx, %#lx, %lu, %x)\n",
+				  __func__, device_get_name(child), type, rid, start,
+				  end, count, flags);
 
 #if defined(NEW_PCIB) && defined(PCI_RES_BUS)
 	if (type ==  PCI_RES_BUS) {
@@ -421,10 +427,11 @@ ofw_pci_alloc_resource(device_t bus, device_t child, int type, int *rid,
 
 	rm = ofw_pci_get_rman(sc, type, flags);
 	if (rm == NULL)  {
+		printf("%s case 2 rm==NULL\n", __func__);
+
 		return (bus_generic_alloc_resource(bus, child, type, rid,
 		    start, end, count, flags | needactivate));
 	}
-
 	rv = rman_reserve_resource(rm, start, end, count, flags, child);
 	if (rv == NULL) {
 		device_printf(bus, "failed to reserve resource for %s\n",
@@ -476,6 +483,45 @@ ofw_pci_release_resource(device_t bus, device_t child, int type, int rid,
 			return (error);
 	}
 	return (rman_release_resource(res));
+}
+
+static int
+ofw_pci_translate_resource(device_t bus, int type, rman_res_t start,
+	rman_res_t *newstart)
+{
+	struct ofw_pci_softc *sc;
+	struct ofw_pci_range *rp;
+	int space;
+
+	sc = device_get_softc(bus);
+
+	/*
+	 * Map this through the ranges list
+	 */
+	for (rp = sc->sc_range; rp < sc->sc_range + sc->sc_nrange &&
+	    rp->pci_hi != 0; rp++) {
+		if (start < rp->pci || start >= rp->pci + rp->size)
+			continue;
+
+		switch (rp->pci_hi & OFW_PCI_PHYS_HI_SPACEMASK) {
+		case OFW_PCI_PHYS_HI_SPACE_IO:
+			space = SYS_RES_IOPORT;
+			break;
+		case OFW_PCI_PHYS_HI_SPACE_MEM32:
+		case OFW_PCI_PHYS_HI_SPACE_MEM64:
+			space = SYS_RES_MEMORY;
+			break;
+		default:
+			space = -1;
+			}
+
+		if (type == space) {
+			start += (rp->host - rp->pci);
+			break;
+		}
+	}
+	*newstart = start;
+	return (0);
 }
 
 static int

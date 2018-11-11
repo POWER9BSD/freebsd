@@ -29,5 +29,6 @@ SRCS+=	bus_if.h \
 
 CFLAGS+= -I${SRCTOP}/sys/compat/linuxkpi/common/include
 CFLAGS+= -I${SRCTOP}/sys/contrib/ck/include
+CFLAGS.gcc+= -Wno-cast-qual
 
 .include <bsd.kmod.mk>

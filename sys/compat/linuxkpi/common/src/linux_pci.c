@@ -72,6 +72,7 @@ static device_method_t pci_methods[] = {
 	DEVMETHOD(device_suspend, linux_pci_suspend),
 	DEVMETHOD(device_resume, linux_pci_resume),
 	DEVMETHOD(device_shutdown, linux_pci_shutdown),
+	DEVMETHOD(bus_translate_resource, bus_generic_translate_resource),
 	DEVMETHOD_END
 };
 
@@ -124,7 +125,6 @@ linux_pci_attach(device_t dev)
 	struct pci_driver *pdrv;
 	const struct pci_device_id *id;
 	device_t parent;
-	devclass_t devclass;
 	int error;
 
 	linux_set_current(curthread);
@@ -133,7 +133,6 @@ linux_pci_attach(device_t dev)
 	pdev = device_get_softc(dev);
 
 	parent = device_get_parent(dev);
-	devclass = device_get_devclass(parent);
 	if (pdrv->isdrm) {
 		dinfo = device_get_ivars(parent);
 		device_set_ivars(dev, dinfo);
@@ -168,6 +167,7 @@ linux_pci_attach(device_t dev)
 		pbus = malloc(sizeof(*pbus), M_DEVBUF, M_WAITOK | M_ZERO);
 		pbus->self = pdev;
 		pbus->number = pci_get_bus(dev);
+		pbus->domain = pci_get_domain(dev);
 		pdev->bus = pbus;
 	}
 
@@ -280,6 +280,36 @@ _linux_pci_register_driver(struct pci_driver *pdrv, devclass_t dc)
 	    BUS_PASS_DEFAULT, &pdrv->bsdclass);
 	mtx_unlock(&Giant);
 	return (-error);
+}
+
+unsigned long
+pci_resource_start(struct pci_dev *pdev, int bar)
+{
+	struct resource_list_entry *rle;
+	unsigned long newstart;
+	device_t dev;
+
+	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
+		return (0);
+	dev = pci_find_dbsf(pdev->bus->domain, pdev->bus->number,
+						PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
+	MPASS(dev != NULL);
+	if (bus_generic_translate_resource(dev, rle->type, rle->start, &newstart)) {
+		device_printf(pdev->dev.bsddev, "translate of %#lx failed\n",
+			rle->start);
+		return (0);
+	}
+	return (newstart);
+}
+
+unsigned long
+pci_resource_len(struct pci_dev *pdev, int bar)
+{
+	struct resource_list_entry *rle;
+
+	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
+		return (0);
+	return rle->count;
 }
 
 int

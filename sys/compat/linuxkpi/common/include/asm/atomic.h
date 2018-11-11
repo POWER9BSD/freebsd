@@ -153,6 +153,11 @@ atomic_cmpxchg(atomic_t *v, int old, int new)
 	return (ret);
 }
 
+#ifdef __powerpc__
+#include <asm/powerpc_atomic.h>
+
+#else
+
 #if defined(__amd64__) || defined(__arm64__) || defined(__i386__)
 #define	LINUXKPI_ATOMIC_8(...) __VA_ARGS__
 #define	LINUXKPI_ATOMIC_16(...) __VA_ARGS__
@@ -262,6 +267,8 @@ atomic_cmpxchg(atomic_t *v, int old, int new)
 	}								\
 	__ret.val;							\
 })
+
+#endif
 
 static inline int
 atomic_dec_if_positive(atomic_t *v)

@@ -169,6 +169,7 @@ static device_method_t pci_methods[] = {
 	DEVMETHOD(bus_suspend_child,	pci_suspend_child),
 	DEVMETHOD(bus_resume_child,	pci_resume_child),
 	DEVMETHOD(bus_rescan,		pci_rescan_method),
+	DEVMETHOD(bus_translate_resource, bus_generic_translate_resource),
 
 	/* PCI interface */
 	DEVMETHOD(pci_read_config,	pci_read_config_method),

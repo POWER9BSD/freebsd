@@ -101,6 +101,7 @@ SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
     "Number of kernel page table pages allocated on bootup");
 
 caddr_t crashdumpmap;
+vm_paddr_t dmaplimit;
 
 SYSCTL_NODE(_vm, OID_AUTO, pmap, CTLFLAG_RD, 0, "VM/pmap parameters");
 
@@ -156,6 +157,7 @@ void mmu_radix_pmap_object_init_pt(pmap_t, vm_offset_t, vm_object_t, vm_pindex_t
 boolean_t mmu_radix_pmap_page_exists_quick(pmap_t, vm_page_t);
 void mmu_radix_pmap_page_init(vm_page_t);
 boolean_t mmu_radix_pmap_page_is_mapped(vm_page_t m);
+void mmu_radix_pmap_page_set_memattr(vm_page_t, vm_memattr_t);
 int mmu_radix_pmap_page_wired_mappings(vm_page_t);
 int mmu_radix_pmap_pinit(pmap_t);
 void mmu_radix_pmap_protect(pmap_t, vm_offset_t, vm_offset_t, vm_prot_t);
@@ -173,7 +175,7 @@ void mmu_radix_pmap_remove_write(vm_page_t);
 void mmu_radix_pmap_unwire(pmap_t, vm_offset_t, vm_offset_t);
 void mmu_radix_pmap_zero_page(vm_page_t);
 void mmu_radix_pmap_zero_page_area(vm_page_t, int, int);
-
+int mmu_radix_pmap_change_attr(vm_offset_t, vm_size_t, vm_memattr_t);
 
 #ifndef MMU_DIRECT
 #include "mmu_oea64.h"
@@ -186,7 +188,6 @@ void mmu_radix_pmap_zero_page_area(vm_page_t, int, int);
 	
 static void	mmu_radix_bootstrap(mmu_t mmup, 
 		    vm_offset_t kernelstart, vm_offset_t kernelend);
-static int mmu_radix_change_attr(mmu_t, vm_offset_t, vm_size_t, vm_memattr_t);
 
 static void mmu_radix_copy_page(mmu_t, vm_page_t, vm_page_t);
 static void mmu_radix_copy_pages(mmu_t mmu, vm_page_t *ma, vm_offset_t a_offset,
@@ -200,7 +201,6 @@ static void mmu_radix_pinit0(mmu_t, pmap_t);
 static void *mmu_radix_mapdev(mmu_t, vm_paddr_t, vm_size_t);
 static void *mmu_radix_mapdev_attr(mmu_t, vm_paddr_t, vm_size_t, vm_memattr_t);
 static void mmu_radix_unmapdev(mmu_t, vm_offset_t, vm_size_t);
-static void mmu_radix_page_set_memattr(mmu_t, vm_page_t m, vm_memattr_t ma);
 static void mmu_radix_kenter_attr(mmu_t, vm_offset_t, vm_paddr_t, vm_memattr_t ma);
 static boolean_t mmu_radix_dev_direct_mapped(mmu_t, vm_paddr_t, vm_size_t);
 static void mmu_radix_dumpsys_map(mmu_t mmu, vm_paddr_t pa, size_t sz,
@@ -210,7 +210,6 @@ static void	mmu_radix_cpu_bootstrap(mmu_t, int ap);
 
 static mmu_method_t mmu_radix_methods[] = {
 	MMUMETHOD(mmu_bootstrap,	mmu_radix_bootstrap),
-	MMUMETHOD(mmu_change_attr,	mmu_radix_change_attr),
 	MMUMETHOD(mmu_copy_page,	mmu_radix_copy_page),
 	MMUMETHOD(mmu_copy_pages,	mmu_radix_copy_pages),
 	MMUMETHOD(mmu_cpu_bootstrap,	mmu_radix_cpu_bootstrap),
@@ -219,7 +218,6 @@ static mmu_method_t mmu_radix_methods[] = {
 	MMUMETHOD(mmu_map,     		mmu_radix_map),
 	MMUMETHOD(mmu_mincore,     		mmu_radix_mincore),
 	MMUMETHOD(mmu_pinit0,		mmu_radix_pinit0),
-	MMUMETHOD(mmu_page_set_memattr,	mmu_radix_page_set_memattr),
 
 	MMUMETHOD(mmu_mapdev,		mmu_radix_mapdev),
 	MMUMETHOD(mmu_mapdev_attr,	mmu_radix_mapdev_attr),
@@ -293,6 +291,8 @@ static boolean_t pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m, struc
 static void mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma);
 static void pmap_invalidate_page(pmap_t pmap, vm_offset_t start);
 static void pmap_invalidate_all(pmap_t pmap);
+static int pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush);
+
 /*
  * Internal flags for pmap_enter()'s helper functions.
  */
@@ -749,10 +749,10 @@ pmap_cache_bits(vm_memattr_t ma)
 	if (ma != VM_MEMATTR_DEFAULT) {
 		switch (ma) {
 		case VM_MEMATTR_UNCACHEABLE:
+		case VM_MEMATTR_WRITE_COMBINING:
 			return (RPTE_ATTR_GUARDEDIO);
 		case VM_MEMATTR_CACHEABLE:
 			return (RPTE_ATTR_MEM);
-		case VM_MEMATTR_WRITE_COMBINING:
 		case VM_MEMATTR_WRITE_BACK:
 		case VM_MEMATTR_PREFETCHABLE:
 			return (RPTE_ATTR_UNGUARDEDIO);
@@ -2073,11 +2073,11 @@ METHOD(bootstrap) vm_offset_t start, vm_offset_t end)
 	if (bootverbose)
 		printf("%s done\n", __func__);
 	pmap_bootstrapped = 1;
+	dmaplimit = roundup2(powerpc_ptob(Maxmem), L2_PAGE_SIZE);
 
 	/*
 	 * patch
 	 */
-
 	cpu_switch_pmap_deactivate = PPC_NOP;
 	__syncicache(&cpu_switch_pmap_deactivate, 0x80);
 	u_trap_overwrite = PPC_NOP;
@@ -5503,6 +5503,9 @@ mmu_radix_pmap_zero_page_area(vm_page_t m, int off, int size)
 	memset(addr + off, 0, size);
 }
 
+
+
+
 VISIBILITY int
 METHOD(mincore) pmap_t pmap, vm_offset_t addr, vm_paddr_t *locked_pa)
 {
@@ -5646,8 +5649,8 @@ METHOD(mapdev_attr) vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 	return (mmu_radix_pmap_mapdev_attr(pa, size, attr));
 }
 
-VISIBILITY void
-METHOD(page_set_memattr) vm_page_t m, vm_memattr_t ma)
+void
+mmu_radix_pmap_page_set_memattr(vm_page_t m, vm_memattr_t ma)
 {
 
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, m, ma);
@@ -5680,6 +5683,76 @@ METHOD(unmapdev) vm_offset_t va, vm_size_t size)
 
 	if (pmap_initialized)
 		kva_free(va, size);
+}
+
+static __inline void
+pmap_pte_attr(pt_entry_t *pte, uint64_t cache_bits, uint64_t mask)
+{
+	uint64_t opte, npte;
+
+	/*
+	 * The cache mode bits are all in the low 32-bits of the
+	 * PTE, so we can just spin on updating the low 32-bits.
+	 */
+	do {
+		opte = *pte;
+		npte = opte & ~mask;
+		npte |= cache_bits;
+	} while (npte != opte && !atomic_cmpset_long(pte, opte, npte));
+}
+
+/*
+ * Tries to demote a 1GB page mapping.
+ */
+static boolean_t
+pmap_demote_l2e(pmap_t pmap, pml2_entry_t *l2e, vm_offset_t va)
+{
+	pml2_entry_t newpdpe, oldpdpe;
+	pml3_entry_t *firstpde, newpde, *pde;
+	vm_paddr_t pdpgpa;
+	vm_page_t pdpg;
+
+	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
+	oldpdpe = *l2e;
+	KASSERT((oldpdpe & (RPTE_LEAF | PG_V)) == (RPTE_LEAF | PG_V),
+	    ("pmap_demote_pdpe: oldpdpe is missing PG_PS and/or PG_V"));
+	if ((pdpg = vm_page_alloc(NULL, va >> L2_PAGE_SIZE_SHIFT, VM_ALLOC_INTERRUPT |
+	    VM_ALLOC_NOOBJ | VM_ALLOC_WIRED)) == NULL) {
+		CTR2(KTR_PMAP, "pmap_demote_pdpe: failure for va %#lx"
+		    " in pmap %p", va, pmap);
+		return (FALSE);
+	}
+	pdpgpa = VM_PAGE_TO_PHYS(pdpg);
+	firstpde = (pml3_entry_t *)PHYS_TO_DMAP(pdpgpa);
+	newpdpe = pdpgpa | PG_M | PG_A | (oldpdpe & RPTE_EAA_P) | PG_RW | PG_V;
+	KASSERT((oldpdpe & PG_A) != 0,
+	    ("pmap_demote_pdpe: oldpdpe is missing PG_A"));
+	KASSERT((oldpdpe & (PG_M | PG_RW)) != PG_RW,
+	    ("pmap_demote_pdpe: oldpdpe is missing PG_M"));
+	newpde = oldpdpe;
+
+	/*
+	 * Initialize the page directory page.
+	 */
+	for (pde = firstpde; pde < firstpde + NPDEPG; pde++) {
+		*pde = newpde;
+		newpde += L3_PAGE_SIZE;
+	}
+
+	/*
+	 * Demote the mapping.
+	 */
+	*l2e = newpdpe;
+
+	/*
+	 * Flush PWC --- XXX revisit
+	 */
+	pmap_invalidate_all(pmap);
+
+	pmap_l2e_demotions++;
+	CTR2(KTR_PMAP, "pmap_demote_pdpe: success for va %#lx"
+	    " in pmap %p", va, pmap);
+	return (TRUE);
 }
 
 vm_paddr_t
@@ -5722,10 +5795,10 @@ mmu_radix_calc_wimg(vm_paddr_t pa, vm_memattr_t ma)
 		case VM_MEMATTR_UNCACHEABLE:
 			return (RPTE_ATTR_GUARDEDIO);
 		case VM_MEMATTR_CACHEABLE:
-			return (RPTE_ATTR_MEM);
-		case VM_MEMATTR_WRITE_COMBINING:
 		case VM_MEMATTR_WRITE_BACK:
 		case VM_MEMATTR_PREFETCHABLE:
+			return (RPTE_ATTR_MEM);
+		case VM_MEMATTR_WRITE_COMBINING:
 			return (RPTE_ATTR_UNGUARDEDIO);
 		}
 	}
@@ -5737,7 +5810,7 @@ mmu_radix_calc_wimg(vm_paddr_t pa, vm_memattr_t ma)
 	for (int i = 0; i < pregions_sz; i++) {
 		if ((pa >= pregions[i].mr_start) &&
 		    (pa < (pregions[i].mr_start + pregions[i].mr_size)))
-			return (0);
+			return (RPTE_ATTR_MEM);
 	}
 	return (RPTE_ATTR_GUARDEDIO);
 }
@@ -5852,20 +5925,227 @@ mmu_radix_pmap_quick_remove_page(vm_offset_t addr __unused)
 	CTR2(KTR_PMAP, "%s(%#x)", __func__, addr);
 }
 
-VISIBILITY int
-METHOD(change_attr) vm_offset_t addr, vm_size_t size, vm_memattr_t mode)
+static void
+pmap_invalidate_cache_range(vm_offset_t sva, vm_offset_t eva)
 {
-	UNIMPLEMENTED();
-	return (0);
-#if 0	
-	int error;
-	CTR4(KTR_PMAP, "%s(%#x, %#zx, %d)", __func__, addr, size, mode);
+	cpu_flush_dcache((void *)sva, eva - sva);
+}
 
+int
+mmu_radix_pmap_change_attr(vm_offset_t va, vm_size_t size, vm_memattr_t mode)
+{
+	int error;
+
+	CTR4(KTR_PMAP, "%s(%#x, %#zx, %d)", __func__, va, size, mode);
 	PMAP_LOCK(kernel_pmap);
-	error = pmap_change_attr_locked(va, size, mode);
+	error = pmap_change_attr_locked(va, size, mode, false);
 	PMAP_UNLOCK(kernel_pmap);
 	return (error);
-#endif
+}
+
+static int
+pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush)
+{
+	vm_offset_t base, offset, tmpva;
+	vm_paddr_t pa_start, pa_end, pa_end1;
+	pml2_entry_t *l2e;
+	pml3_entry_t *l3e;
+	pt_entry_t *pte;
+	int cache_bits, error;
+	boolean_t changed;
+
+	PMAP_LOCK_ASSERT(kernel_pmap, MA_OWNED);
+	base = trunc_page(va);
+	offset = va & PAGE_MASK;
+	size = round_page(offset + size);
+
+	/*
+	 * Only supported on kernel virtual addresses, including the direct
+	 * map but excluding the recursive map.
+	 */
+	if (base < DMAP_MIN_ADDRESS)
+		return (EINVAL);
+
+	cache_bits = pmap_cache_bits(mode);
+	changed = FALSE;
+
+	/*
+	 * Pages that aren't mapped aren't supported.  Also break down 2MB pages
+	 * into 4KB pages if required.
+	 */
+	for (tmpva = base; tmpva < base + size; ) {
+		l2e = pmap_pml2e(kernel_pmap, tmpva);
+		if (l2e == NULL || *l2e == 0)
+			return (EINVAL);
+		if (*l2e & RPTE_LEAF) {
+			/*
+			 * If the current 1GB page already has the required
+			 * memory type, then we need not demote this page. Just
+			 * increment tmpva to the next 1GB page frame.
+			 */
+			if ((*l2e & RPTE_ATTR_MASK) == cache_bits) {
+				tmpva = trunc_1gpage(tmpva) + L2_PAGE_SIZE;
+				continue;
+			}
+
+			/*
+			 * If the current offset aligns with a 1GB page frame
+			 * and there is at least 1GB left within the range, then
+			 * we need not break down this page into 2MB pages.
+			 */
+			if ((tmpva & L2_PAGE_MASK) == 0 &&
+			    tmpva + L2_PAGE_MASK < base + size) {
+				tmpva += L2_PAGE_MASK;
+				continue;
+			}
+			if (!pmap_demote_l2e(kernel_pmap, l2e, tmpva))
+				return (ENOMEM);
+		}
+		l3e = pmap_l2e_to_l3e(l2e, tmpva);
+		if (*l3e == 0)
+			return (EINVAL);
+		if (*l3e & RPTE_LEAF) {
+			/*
+			 * If the current 2MB page already has the required
+			 * memory type, then we need not demote this page. Just
+			 * increment tmpva to the next 2MB page frame.
+			 */
+			if ((*l3e & RPTE_ATTR_MASK) == cache_bits) {
+				tmpva = trunc_2mpage(tmpva) + L3_PAGE_SIZE;
+				continue;
+			}
+
+			/*
+			 * If the current offset aligns with a 2MB page frame
+			 * and there is at least 2MB left within the range, then
+			 * we need not break down this page into 4KB pages.
+			 */
+			if ((tmpva & L3_PAGE_MASK) == 0 &&
+			    tmpva + L3_PAGE_MASK < base + size) {
+				tmpva += L3_PAGE_SIZE;
+				continue;
+			}
+			if (!pmap_demote_l3e(kernel_pmap, l3e, tmpva))
+				return (ENOMEM);
+		}
+		pte = pmap_l3e_to_pte(l3e, tmpva);
+		if (*pte == 0)
+			return (EINVAL);
+		tmpva += PAGE_SIZE;
+	}
+	error = 0;
+
+	/*
+	 * Ok, all the pages exist, so run through them updating their
+	 * cache mode if required.
+	 */
+	pa_start = pa_end = 0;
+	for (tmpva = base; tmpva < base + size; ) {
+		l2e = pmap_pml2e(kernel_pmap, tmpva);
+		if (*l2e & RPTE_LEAF) {
+			if ((*l2e & RPTE_ATTR_MASK) != cache_bits) {
+				pmap_pte_attr(l2e, cache_bits,
+				    RPTE_ATTR_MASK);
+				changed = TRUE;
+			}
+			if (tmpva >= VM_MIN_KERNEL_ADDRESS &&
+			    (*l2e & PG_PS_FRAME) < dmaplimit) {
+				if (pa_start == pa_end) {
+					/* Start physical address run. */
+					pa_start = *l2e & PG_PS_FRAME;
+					pa_end = pa_start + L2_PAGE_SIZE;
+				} else if (pa_end == (*l2e & PG_PS_FRAME))
+					pa_end += L2_PAGE_SIZE;
+				else {
+					/* Run ended, update direct map. */
+					error = pmap_change_attr_locked(
+					    PHYS_TO_DMAP(pa_start),
+					    pa_end - pa_start, mode, noflush);
+					if (error != 0)
+						break;
+					/* Start physical address run. */
+					pa_start = *l2e & PG_PS_FRAME;
+					pa_end = pa_start + L2_PAGE_SIZE;
+				}
+			}
+			tmpva = trunc_1gpage(tmpva) + L2_PAGE_SIZE;
+			continue;
+		}
+		l3e = pmap_l2e_to_l3e(l2e, tmpva);
+		if (*l3e & RPTE_LEAF) {
+			if ((*l3e & RPTE_ATTR_MASK) != cache_bits) {
+				pmap_pte_attr(l3e, cache_bits,
+				    RPTE_ATTR_MASK);
+				changed = TRUE;
+			}
+			if (tmpva >= VM_MIN_KERNEL_ADDRESS &&
+			    (*l3e & PG_PS_FRAME) < dmaplimit) {
+				if (pa_start == pa_end) {
+					/* Start physical address run. */
+					pa_start = *l3e & PG_PS_FRAME;
+					pa_end = pa_start + L3_PAGE_SIZE;
+				} else if (pa_end == (*l3e & PG_PS_FRAME))
+					pa_end += L3_PAGE_SIZE;
+				else {
+					/* Run ended, update direct map. */
+					error = pmap_change_attr_locked(
+					    PHYS_TO_DMAP(pa_start),
+					    pa_end - pa_start, mode, noflush);
+					if (error != 0)
+						break;
+					/* Start physical address run. */
+					pa_start = *l3e & PG_PS_FRAME;
+					pa_end = pa_start + L3_PAGE_SIZE;
+				}
+			}
+			tmpva = trunc_2mpage(tmpva) + L3_PAGE_SIZE;
+		} else {
+			pte = pmap_l3e_to_pte(l3e, tmpva);
+			if ((*pte & RPTE_ATTR_MASK) != cache_bits) {
+				pmap_pte_attr(pte, cache_bits,
+				    RPTE_ATTR_MASK);
+				changed = TRUE;
+			}
+			if (tmpva >= VM_MIN_KERNEL_ADDRESS &&
+			    (*pte & PG_FRAME) < dmaplimit) {
+				if (pa_start == pa_end) {
+					/* Start physical address run. */
+					pa_start = *pte & PG_FRAME;
+					pa_end = pa_start + PAGE_SIZE;
+				} else if (pa_end == (*pte & PG_FRAME))
+					pa_end += PAGE_SIZE;
+				else {
+					/* Run ended, update direct map. */
+					error = pmap_change_attr_locked(
+					    PHYS_TO_DMAP(pa_start),
+					    pa_end - pa_start, mode, noflush);
+					if (error != 0)
+						break;
+					/* Start physical address run. */
+					pa_start = *pte & PG_FRAME;
+					pa_end = pa_start + PAGE_SIZE;
+				}
+			}
+			tmpva += PAGE_SIZE;
+		}
+	}
+	if (error == 0 && pa_start != pa_end && pa_start < dmaplimit) {
+		pa_end1 = MIN(pa_end, dmaplimit);
+		if (pa_start != pa_end1)
+			error = pmap_change_attr_locked(PHYS_TO_DMAP(pa_start),
+			    pa_end1 - pa_start, mode, noflush);
+	}
+
+	/*
+	 * Flush CPU caches if required to make sure any data isn't cached that
+	 * shouldn't be, etc.
+	 */
+	if (changed) {
+		pmap_invalidate_range(kernel_pmap, base, tmpva);
+		if (!noflush)
+			pmap_invalidate_cache_range(base, tmpva);
+	}
+	return (error);
 }
 
 #ifdef DDB

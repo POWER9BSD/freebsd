@@ -3861,6 +3861,23 @@ bus_generic_resume(device_t dev)
 }
 
 /**
+ * @brief Wrapper function for BUS_TRANSLATE_RESOURCE().
+ *
+ * This function simply calls the BUS_TRANSLATE_RESOURCE() method of the
+ * parent of @p dev.
+ */
+int
+bus_generic_translate_resource(device_t dev, int type, rman_res_t start,
+	rman_res_t *newstart)
+{
+	if (dev->parent == NULL) {
+		device_printf(dev, "no parent for %lx - EINVAL\n", start);
+		return (EINVAL);
+	}
+	return (BUS_TRANSLATE_RESOURCE(dev->parent, type, start, newstart));
+}
+
+/**
  * @brief Helper function for implementing BUS_PRINT_CHILD().
  *
  * This function prints the first part of the ascii representation of
@@ -4927,6 +4944,7 @@ static kobj_method_t root_methods[] = {
 	KOBJMETHOD(bus_write_ivar,	bus_generic_write_ivar),
 	KOBJMETHOD(bus_setup_intr,	root_setup_intr),
 	KOBJMETHOD(bus_child_present,	root_child_present),
+	KOBJMETHOD(bus_translate_resource,	bus_generic_translate_resource),
 	KOBJMETHOD(bus_get_cpus,	root_get_cpus),
 
 	KOBJMETHOD_END
@@ -5477,7 +5495,7 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
     struct thread *td)
 {
 	struct devreq *req;
-	device_t dev;
+	device_t dev = NULL;
 	int error, old;
 
 	/* Locate the device to control. */

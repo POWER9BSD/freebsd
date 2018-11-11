@@ -111,6 +111,7 @@ DEFINE_PMAP_IFUNC(void, pmap_activate, (struct thread *));
 DEFINE_PMAP_IFUNC(void, pmap_advise, (pmap_t, vm_offset_t, vm_offset_t, int));
 DEFINE_PMAP_IFUNC(void, pmap_align_superpage, (vm_object_t, vm_ooffset_t,
 	vm_offset_t *, vm_size_t));
+DEFINE_PMAP_IFUNC(int, pmap_change_attr, (vm_offset_t, vm_size_t, vm_memattr_t));
 DEFINE_PMAP_IFUNC(void, pmap_clear_modify, (vm_page_t));
 DEFINE_PMAP_IFUNC(void, pmap_copy, (pmap_t, pmap_t, vm_offset_t, vm_size_t, vm_offset_t));
 DEFINE_PMAP_IFUNC(int, pmap_decode_kernel_ptr, (vm_offset_t, int *, vm_offset_t *));
@@ -131,6 +132,7 @@ DEFINE_PMAP_IFUNC(boolean_t, pmap_is_referenced, (vm_page_t));
 DEFINE_PMAP_IFUNC(boolean_t, pmap_page_exists_quick, (pmap_t, vm_page_t));
 DEFINE_PMAP_IFUNC(void, pmap_page_init, (vm_page_t));
 DEFINE_PMAP_IFUNC(boolean_t, pmap_page_is_mapped, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, pmap_page_set_memattr, (vm_page_t, vm_memattr_t));
 DEFINE_PMAP_IFUNC(int, pmap_page_wired_mappings, (vm_page_t));
 DEFINE_PMAP_IFUNC(void, pmap_protect, (pmap_t, vm_offset_t, vm_offset_t, vm_prot_t));
 DEFINE_PMAP_IFUNC(bool, pmap_ps_enabled, (pmap_t));
@@ -577,8 +579,8 @@ pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 	return (MMU_MAPDEV_ATTR(mmu_obj, pa, size, attr));
 }
 
-void
-pmap_page_set_memattr(vm_page_t m, vm_memattr_t ma)
+VISIBILITY void
+FUNCNAME(pmap_page_set_memattr)(vm_page_t m, vm_memattr_t ma)
 {
 
 	CTR3(KTR_PMAP, "%s(%p, %#x)", __func__, m, ma);
@@ -665,8 +667,8 @@ FUNCNAME(pmap_quick_remove_page)(vm_offset_t addr)
 	MMU_QUICK_REMOVE_PAGE(mmu_obj, addr);
 }
 
-int
-pmap_change_attr(vm_offset_t addr, vm_size_t size, vm_memattr_t mode)
+VISIBILITY int
+FUNCNAME(pmap_change_attr)(vm_offset_t addr, vm_size_t size, vm_memattr_t mode)
 {
 	CTR4(KTR_PMAP, "%s(%#x, %#zx, %d)", __func__, addr, size, mode);
 	return (MMU_CHANGE_ATTR(mmu_obj, addr, size, mode));
