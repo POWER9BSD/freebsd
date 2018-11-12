@@ -240,4 +240,6 @@ options		BOOTVERBOSE
 options		ZFS
 options		TMPFS
 options		NUMA
+options		NULLFS
+options		FDESCFS
 
