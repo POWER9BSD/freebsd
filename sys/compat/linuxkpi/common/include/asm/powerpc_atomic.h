@@ -5,8 +5,8 @@
 #define PPC_ATOMIC_ENTRY_BARRIER "\n" __XSTRING(sync) "\n"
 #define PPC_ATOMIC_EXIT_BARRIER	 "\n" __XSTRING(sync) "\n"
 #else
-#define PPC_ATOMIC_ENTRY_BARRIER
-#define PPC_ATOMIC_EXIT_BARRIER
+#define PPC_ATOMIC_ENTRY_BARRIER "\n"
+#define PPC_ATOMIC_EXIT_BARRIER "\n"
 #endif
 
 static __always_inline uint8_t
@@ -225,8 +225,8 @@ __xchg_u32_relaxed(volatile uint32_t* p, uint32_t new)
 }
 
 #ifdef __powerpc64__
-static __always_inline int
-__xchg_u64_relaxed(volatile u_int* p, u_int old, u_int new)
+static __always_inline uint64_t
+__xchg_u64_relaxed(volatile uint64_t* p, uint64_t new)
 {
 	int	prev;
 
@@ -294,11 +294,9 @@ __xchg_u64_relaxed(volatile u_int* p, u_int old, u_int new)
 	case 1:								\
 		__cmpxchg_u8_relaxed((volatile u8*)ptr,	__ret.u8, __new.u8);	\
 		break;							\
-	)								\
 	case 2:								\
 		__cmpxchg_u16_relaxed((volatile u16*)ptr,	__ret.u16, __new.u16);	\
 		break;							\
-	)								\
 	case 4:								\
 		__cmpxchg_u32_relaxed((volatile u32*)ptr,	__ret.u32, __new.u32);	\
 		break;							\
@@ -310,35 +308,6 @@ __xchg_u64_relaxed(volatile u_int* p, u_int old, u_int new)
 	    }								\
 	__ret.val;							\
 })
-#if 0
-#define	xchg(ptr, new) ({						\
-	union {								\
-		__typeof(*(ptr)) val;					\
-		u8 u8;						\
-		u16 u16;						\
-		u32 u32;						\
-		u64 u64;						\
-	} __ret, __new = { .val = (new) };				\
-	switch (sizeof(__ret.val)) {					\
-	case 1:								\
-		__ret.u8 = __xchg_u8_relaxed((volatile u8 *)(ptr), __new.u8); \
-		break;															\
-	case 2:								\
-		__ret.u16 = __xchg_u16_relaxed((volatile u16 *)(ptr), __new.u16); \
-		break;							\
-	)								\
-	case 4:								\
-		__ret.u32 = __xchg_u16_relaxed((volatile u32 *)(ptr), __new.u32); \
-		break;							\
-	LINUXKPI_ATOMIC_64(						\
-	case 8:								\
-	__ret.u64 = __xchg_u64_relaxed((volatile u64 *)(ptr), __new.u64); \
-		break;							\
-	)								\
-	}								\
-	__ret.val;							\
-})
-#endif
 
 #define	xchg_relaxed(ptr, new) ({						\
 	union {								\
@@ -355,9 +324,8 @@ __xchg_u64_relaxed(volatile u_int* p, u_int old, u_int new)
 	case 2:								\
 		__ret.u16 = __xchg_u16_relaxed((volatile u16 *)(ptr), __new.u16); \
 		break;							\
-	)								\
 	case 4:								\
-		__ret.u32 = __xchg_u16_relaxed((volatile u32 *)(ptr), __new.u32); \
+		__ret.u32 = __xchg_u32_relaxed((volatile u32 *)(ptr), __new.u32); \
 		break;							\
 	LINUXKPI_ATOMIC_64(						\
 	case 8:								\
@@ -370,9 +338,9 @@ __xchg_u64_relaxed(volatile u_int* p, u_int old, u_int new)
 
 #define xchg(ptr, new) ({						\
     __typeof(*(ptr)) v;					\
-	__asm __volatile (PPC_ATOMIC_ENTRY_BARRER);	\
+	__asm __volatile("sync");							\
 	v = xchg_relaxed(ptr, new);					\
-	__asm __volatile (PPC_ATOMIC_EXIT_BARRER);	\
+	__asm __volatile("sync");							\
 	v;											\
   })
 
