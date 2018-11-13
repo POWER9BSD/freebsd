@@ -124,7 +124,6 @@ linux_pci_attach(device_t dev)
 	struct pci_driver *pdrv;
 	const struct pci_device_id *id;
 	device_t parent;
-	devclass_t devclass;
 	int error;
 
 	linux_set_current(curthread);
@@ -133,7 +132,6 @@ linux_pci_attach(device_t dev)
 	pdev = device_get_softc(dev);
 
 	parent = device_get_parent(dev);
-	devclass = device_get_devclass(parent);
 	if (pdrv->isdrm) {
 		dinfo = device_get_ivars(parent);
 		device_set_ivars(dev, dinfo);
