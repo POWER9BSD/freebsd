@@ -621,7 +621,7 @@ static inline void pci_disable_sriov(struct pci_dev *dev)
 /* XXX This should not be necessary. */
 #define	pcix_set_mmrbc(d, v)	0
 #define	pcix_get_max_mmrbc(d)	0
-#define	pcie_set_readrq(d, v)	0
+#define	pcie_set_readrq(d, v)	pci_set_max_read_req(&(d)->dev, (v))
 
 #define	PCI_DMA_BIDIRECTIONAL	0
 #define	PCI_DMA_TODEVICE	1
