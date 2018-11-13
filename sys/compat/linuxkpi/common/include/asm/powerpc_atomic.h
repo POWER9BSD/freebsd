@@ -16,11 +16,11 @@ __cmpxchg_u8(volatile uint8_t* p, uint8_t old, uint8_t new)
 
 	__asm __volatile (
 		 PPC_ATOMIC_ENTRY_BARRIER					  
-	"1: lbarx %0,0,%2       # load old value\n"
-		"cmpw 0,%0,%3 	    # compare\n"
-		"bne- 2f		    # exit if not equal\n"
-		"stbcx. %4, 0, %2   # attempt to store\n"
-		"bne- 1b			# retry if failed\n"
+	"1: lbarx %0,0,%2       \n" // load old value \n"
+		"cmpw 0,%0,%3 	    \n" // compare\n"
+		"bne- 2f		    \n" // exit if not equal\n"
+		"stbcx. %4, 0, %2   \n" // attempt to store\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 PPC_ATOMIC_EXIT_BARRIER
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
@@ -37,11 +37,11 @@ __cmpxchg_u16(volatile uint16_t* p, uint16_t old, uint16_t new)
 
 	__asm __volatile (
 		 PPC_ATOMIC_ENTRY_BARRIER					  
-	"1: lharx %0,0,%2       # load old value\n"
-		"cmpw 0,%0,%3 	    # compare\n"
-		"bne- 2f		    # exit if not equal\n"
-		"sthcx. %4, 0, %2   # attempt to store\n"
-		"bne- 1b			# retry if failed\n"
+	"1: lharx %0,0,%2       \n" // load old value\n"
+		"cmpw 0,%0,%3 	    \n" // compare\n"
+		"bne- 2f		    \n" // exit if not equal\n"
+		"sthcx. %4, 0, %2   \n" // attempt to store\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 PPC_ATOMIC_EXIT_BARRIER
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
@@ -58,11 +58,11 @@ __cmpxchg_u32(volatile uint32_t* p, uint32_t old, uint32_t new)
 
 	__asm __volatile (
 		 PPC_ATOMIC_ENTRY_BARRIER 
-	"1: lwarx %0,0,%2       # load old value\n"
-		"cmpw 0,%0,%3 	    # compare\n"
-		"bne- 2f		    # exit if not equal\n"
-		"stwcx. %4, 0, %2   # attempt to store\n"
-		"bne- 1b			# retry if failed\n"
+	"1: lwarx %0,0,%2       \n" // load old value\n"
+		"cmpw 0,%0,%3 	    \n" // compare\n"
+		"bne- 2f		    \n" // exit if not equal\n"
+		"stwcx. %4, 0, %2   \n" // attempt to store\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 PPC_ATOMIC_EXIT_BARRIER
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
@@ -78,11 +78,11 @@ __cmpxchg_u8_relaxed(volatile uint8_t* p, uint8_t old, uint8_t new)
 	uint8_t	prev;
 
 	__asm __volatile (
-	"1: lbarx %0,0,%2       # load old value\n"
-		"cmpw 0,%0,%3 	    # compare\n"
-		"bne- 2f		    # exit if not equal\n"
-		"stbcx. %4, 0, %2   # attempt to store\n"
-		"bne- 1b			# retry if failed\n"
+	"1: lbarx %0,0,%2       \n" // load old value\n"
+		"cmpw 0,%0,%3 	    \n" // compare\n"
+		"bne- 2f		    \n" // exit if not equal\n"
+		"stbcx. %4, 0, %2   \n" // attempt to store\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
 		: "r" (p), "r" (old), "r" (new)
@@ -97,11 +97,11 @@ __cmpxchg_u16_relaxed(volatile uint16_t* p, uint16_t old, uint16_t new)
 	uint16_t	prev;
 
 	__asm __volatile (
-	"1: lharx %0,0,%2       # load old value\n"
-		"cmpw 0,%0,%3 	    # compare\n"
-		"bne- 2f		    # exit if not equal\n"
-		"sthcx. %4, 0, %2   # attempt to store\n"
-		"bne- 1b			# retry if failed\n"
+	"1: lharx %0,0,%2       \n" // load old value\n"
+		"cmpw 0,%0,%3 	    \n" // compare\n"
+		"bne- 2f		    \n" // exit if not equal\n"
+		"sthcx. %4, 0, %2   \n" // attempt to store\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
 		: "r" (p), "r" (old), "r" (new)
@@ -116,11 +116,11 @@ __cmpxchg_u32_relaxed(volatile uint32_t* p, uint32_t old, uint32_t new)
 	uint32_t	prev;
 
 	__asm __volatile (
-	"1: lwarx %0,0,%2       # load old value\n"
-		"cmpw 0,%0,%3 	    # compare\n"
-		"bne- 2f		    # exit if not equal\n"
-		"stwcx. %4, 0, %2   # attempt to store\n"
-		"bne- 1b			# retry if failed\n"
+	"1: lwarx %0,0,%2       \n" // load old value\n"
+		"cmpw 0,%0,%3 	    \n" // compare\n"
+		"bne- 2f		    \n" // exit if not equal\n"
+		"stwcx. %4, 0, %2   \n" // attempt to store\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
 		: "r" (p), "r" (old), "r" (new)
@@ -138,11 +138,11 @@ __cmpxchg_u64(volatile uint64_t* p, uint64_t old, uint64_t new)
 
 	__asm __volatile (
 		 PPC_ATOMIC_ENTRY_BARRIER					  
-	"1: ldarx %0,0,%2       # load old value\n"
-		"cmpd 0,%0,%3 	    # compare\n"
-		"bne- 2f		    # exit if not equal\n"
-		"stdcx. %4, 0, %2   # attempt to store\n"
-		"bne- 1b			# retry if failed\n"
+	"1: ldarx %0,0,%2       \n" // load old value\n"
+		"cmpd 0,%0,%3 	    \n" // compare\n"
+		"bne- 2f		    \n" // exit if not equal\n"
+		"stdcx. %4, 0, %2   \n" // attempt to store\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 PPC_ATOMIC_EXIT_BARRIER
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
@@ -158,11 +158,11 @@ __cmpxchg_u64_relaxed(volatile uint64_t* p, uint64_t old, uint64_t new)
 	uint64_t	prev;
 
 	__asm __volatile (
-	"1: ldarx %0,0,%2       # load old value\n"
-		"cmpd 0,%0,%3 	    # compare\n"
-		"bne- 2f		    # exit if not equal\n"
-		"stdcx. %4, 0, %2   # attempt to store\n"
-		"bne- 1b			# retry if failed\n"
+	"1: ldarx %0,0,%2       \n" // load old value\n"
+		"cmpd 0,%0,%3 	    \n" // compare\n"
+		"bne- 2f		    \n" // exit if not equal\n"
+		"stdcx. %4, 0, %2   \n" // attempt to store\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
 		: "r" (p), "r" (old), "r" (new)
@@ -179,9 +179,9 @@ __xchg_u8_relaxed(volatile uint8_t* p, uint8_t new)
 	uint8_t	prev;
 
 	__asm __volatile (
-	"1: lbarx %0,0,%2       # load old value\n"
-		"stbcx. %3, 0, %2   # store new\n"
-		"bne- 1b			# retry if failed\n"
+	"1: lbarx %0,0,%2       \n" // load old value\n"
+		"stbcx. %3, 0, %2   \n" // store new\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
 		: "r" (p), "r" (new)
@@ -196,9 +196,9 @@ __xchg_u16_relaxed(volatile uint16_t* p, uint16_t new)
 	uint16_t	prev;
 
 	__asm __volatile (
-	"1: lharx %0,0,%2       # load old value\n"
-		"sthcx. %3, 0, %2   # store new\n"
-		"bne- 1b			# retry if failed\n"
+	"1: lharx %0,0,%2       \n" // load old value\n"
+		"sthcx. %3, 0, %2   \n" // store new\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
 		: "r" (p), "r" (new)
@@ -213,9 +213,9 @@ __xchg_u32_relaxed(volatile uint32_t* p, uint32_t new)
 	uint32_t	prev;
 
 	__asm __volatile (
-	"1: lwarx %0,0,%2       # load old value\n"
-		"stwcx. %3, 0, %2   # store new\n"
-		"bne- 1b			# retry if failed\n"
+	"1: lwarx %0,0,%2       \n" // load old value\n"
+		"stwcx. %3, 0, %2   \n" // store new\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
 		: "r" (p), "r" (new)
@@ -231,11 +231,11 @@ __xchg_u64_relaxed(volatile uint64_t* p, uint64_t new)
 	int	prev;
 
 	__asm __volatile (
-	"1: ldarx %0,0,%2       # load old value\n"
-		"cmpd 0,%0,%3 	    # compare\n"
-		"bne- 2f		    # exit if not equal\n"
-		"stdcx. %4, 0, %2   # attempt to store\n"
-		"bne- 1b			# retry if failed\n"
+	"1: ldarx %0,0,%2       \n" // load old value\n"
+		"cmpd 0,%0,%3 	    \n" // compare\n"
+		"bne- 2f		    \n" // exit if not equal\n"
+		"stdcx. %3, 0, %2   \n" // attempt to store\n"
+		"bne- 1b			\n" // retry if failed\n"
 		 "2:" 
 		: "=&r" (prev), "+m" (*p)
 		: "r" (p), "r" (new)
