@@ -1009,3 +1009,6 @@ NVME_USE_NVD	opt_nvme.h
 
 # amdsbwd options
 AMDSBWD_DEBUG	opt_amdsbwd.h
+
+# iWARP client interface support in ixl
+IXL_IW			opt_ixl.h
