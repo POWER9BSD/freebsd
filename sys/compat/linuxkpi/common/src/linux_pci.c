@@ -280,6 +280,33 @@ _linux_pci_register_driver(struct pci_driver *pdrv, devclass_t dc)
 	return (-error);
 }
 
+unsigned long
+pci_resource_start(struct pci_dev *pdev, int bar)
+{
+	struct resource_list_entry *rle;
+	unsigned long newstart;
+
+	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
+		return (0);
+	if (bus_translate_resource(pdev->dev.bsddev,
+		    rle->type, rle->start, &newstart)) {
+		device_printf(pdev->dev.bsddev, "translate of %#lx failed\n",
+			rle->start);
+		return (0);
+	}
+	return (newstart);
+}
+
+unsigned long
+pci_resource_len(struct pci_dev *pdev, int bar)
+{
+	struct resource_list_entry *rle;
+
+	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
+		return (0);
+	return rle->count;
+}
+
 int
 linux_pci_register_driver(struct pci_driver *pdrv)
 {

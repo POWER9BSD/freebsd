@@ -259,29 +259,8 @@ linux_pci_find_irq_dev(unsigned int irq)
 	return (found);
 }
 
-static inline unsigned long
-pci_resource_start(struct pci_dev *pdev, int bar)
-{
-	struct resource_list_entry *rle;
-	unsigned long newstart;
-
-	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
-		return (0);
-	if (bus_translate_resource(pdev->dev.bsddev,
-		    rle->type, rle->start, &newstart))
-		return (0);
-	return (newstart);
-}
-
-static inline unsigned long
-pci_resource_len(struct pci_dev *pdev, int bar)
-{
-	struct resource_list_entry *rle;
-
-	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
-		return (0);
-	return rle->count;
-}
+unsigned long pci_resource_start(struct pci_dev *pdev, int bar);
+unsigned long pci_resource_len(struct pci_dev *pdev, int bar);
 
 static inline int
 pci_resource_type(struct pci_dev *pdev, int bar)
