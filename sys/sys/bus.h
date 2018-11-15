@@ -426,6 +426,8 @@ struct resource *
 	bus_generic_alloc_resource(device_t bus, device_t child, int type,
 				   int *rid, rman_res_t start, rman_res_t end,
 				   rman_res_t count, u_int flags);
+int	bus_generic_translate_resource(device_t dev, int type, rman_res_t start,
+			      rman_res_t *newstart);
 int	bus_generic_attach(device_t dev);
 int	bus_generic_bind_intr(device_t dev, device_t child,
 			      struct resource *irq, int cpu);
@@ -523,8 +525,6 @@ int	bus_map_resource(device_t dev, int type, struct resource *r,
 			 struct resource_map *map);
 int	bus_unmap_resource(device_t dev, int type, struct resource *r,
 			   struct resource_map *map);
-int	bus_translate_resource(device_t dev, int type, rman_res_t start,
-			      rman_res_t *newstart);
 int	bus_get_cpus(device_t dev, enum cpu_sets op, size_t setsize,
 		     struct _cpuset *cpuset);
 bus_dma_tag_t bus_get_dma_tag(device_t dev);

@@ -71,6 +71,9 @@ static bus_deactivate_resource_t nexus_deactivate_resource;
 static bus_space_tag_t nexus_get_bus_tag(device_t, device_t);
 static int nexus_get_cpus(device_t, device_t, enum cpu_sets, size_t,
                cpuset_t *);
+static int nexus_translate_resource(device_t bus, int type, rman_res_t start,
+									rman_res_t *newstart);
+
 #ifdef SMP
 static bus_bind_intr_t nexus_bind_intr;
 #endif
@@ -91,6 +94,7 @@ static device_method_t nexus_methods[] = {
 #ifdef SMP
 	DEVMETHOD(bus_bind_intr,	nexus_bind_intr),
 #endif
+	DEVMETHOD(bus_translate_resource,	nexus_translate_resource),
 	DEVMETHOD(bus_config_intr,	nexus_config_intr),
 	DEVMETHOD(bus_get_bus_tag,	nexus_get_bus_tag),
 	DEVMETHOD(bus_get_cpus,		nexus_get_cpus),
@@ -264,3 +268,11 @@ nexus_deactivate_resource(device_t bus __unused, device_t child __unused,
 	return (rman_deactivate_resource(r));
 }
 
+static int
+nexus_translate_resource(device_t bus, int type, rman_res_t start,
+	rman_res_t *newstart)
+{
+	device_printf(bus, "%s(%d, %#lx, %p)\n", __func__, type, start, newstart);
+	panic("unhandled translation\n");
+	return (0);
+}
