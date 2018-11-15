@@ -551,11 +551,11 @@ powerpc_setup_intr(const char *name, u_int irq, driver_filter_t filter,
 			    i->pol != INTR_POLARITY_CONFORM)
 				PIC_CONFIG(i->pic, i->intline, i->trig, i->pol);
 
-			if (i->pic == root_pic)
-				PIC_BIND(i->pic, i->intline, i->pi_cpuset);
-
 			if (enable)
 				PIC_ENABLE(i->pic, i->intline, i->vector);
+
+			if (i->pic == root_pic)
+				PIC_BIND(i->pic, i->intline, i->pi_cpuset);
 		}
 	}
 	return (error);
