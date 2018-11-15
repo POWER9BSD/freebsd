@@ -146,8 +146,9 @@ vga_pci_is_boot_display(device_t dev)
 void *
 vga_pci_map_bios(device_t dev, size_t *size)
 {
-	int rid;
 	struct resource *res;
+	uint32_t rom_addr;
+	int rid;
 
 #if defined(__amd64__) || defined(__i386__)
 	if (vga_pci_is_boot_display(dev)) {
@@ -165,12 +166,33 @@ vga_pci_map_bios(device_t dev, size_t *size)
 	}
 #endif
 
-	rid = PCIR_BIOS;
+	switch(pci_read_config(dev, PCIR_HDRTYPE, 1)) {
+	case PCIM_HDRTYPE_BRIDGE:
+		rid = PCIR_BIOS_1;
+		break;
+	case PCIM_HDRTYPE_CARDBUS:
+		rid = 0;
+		break;
+	default:
+		rid = PCIR_BIOS;
+		break;
+	}
+	if (rid == 0)
+		return (NULL);
 	res = vga_pci_alloc_resource(dev, NULL, SYS_RES_MEMORY, &rid, 0,
 	    ~0, 1, RF_ACTIVE);
+
 	if (res == NULL) {
+		printf("vga_pci_alloc_resource failed\n");
 		return (NULL);
 	}
+	/*
+	 * Enable ROM decode
+	 */
+	rom_addr = pci_read_config(dev, rid, 4);
+	rom_addr &= 0x7ff;
+	rom_addr |= rman_get_start(res) | 0x1;
+	pci_write_config(dev, rid, rom_addr, 4);
 
 	*size = rman_get_size(res);
 	return (rman_get_virtual(res));
