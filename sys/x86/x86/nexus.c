@@ -117,6 +117,8 @@ static	int nexus_map_resource(device_t bus, device_t child, int type,
 			       struct resource_map *map);
 static	int nexus_unmap_resource(device_t bus, device_t child, int type,
 				 struct resource *r, struct resource_map *map);
+static int nexus_translate_resource(device_t bus, int type, rman_res_t s,
+				 rman_res_t *news)
 static	int nexus_release_resource(device_t, device_t, int, int,
 				   struct resource *);
 static	int nexus_setup_intr(device_t, device_t, struct resource *, int flags,
@@ -155,6 +157,7 @@ static device_method_t nexus_methods[] = {
 	DEVMETHOD(bus_alloc_resource,	nexus_alloc_resource),
 	DEVMETHOD(bus_adjust_resource,	nexus_adjust_resource),
 	DEVMETHOD(bus_release_resource,	nexus_release_resource),
+	DEVMETHOD(bus_translate_resource,	nexus_translate_resource),
 	DEVMETHOD(bus_activate_resource, nexus_activate_resource),
 	DEVMETHOD(bus_deactivate_resource, nexus_deactivate_resource),
 	DEVMETHOD(bus_map_resource,	nexus_map_resource),
@@ -547,6 +550,15 @@ nexus_unmap_resource(device_t bus, device_t child, int type, struct resource *r,
 	default:
 		return (EINVAL);
 	}
+	return (0);
+}
+
+static int
+nexus_translate_resource(device_t bus, int type, rman_res_t s,
+	rman_res_t *news)
+{
+	/* bus == phys */
+	*news = s;
 	return (0);
 }
 

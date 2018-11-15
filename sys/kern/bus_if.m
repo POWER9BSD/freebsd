@@ -67,18 +67,6 @@ CODE {
 		panic("bus_add_child is not implemented");
 	}
 
-	static int
-	null_translate_resource(device_t bus, int type, rman_res_t s,
-	    rman_res_t *news)
-	{
-#if defined(__amd64__) || defined(__i386__)
-	    *news = s;
-	    return (0);
-#else
-	    return (ENXIO);
-#endif
-	}
-	    
 };
 
 /**
@@ -424,7 +412,7 @@ METHOD int translate_resource {
 	int		_type;
 	rman_res_t	_start;
 	rman_res_t	*_newstart;
-} DEFAULT null_translate_resource;
+};
 
 /**
  * @brief Release a resource
