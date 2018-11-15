@@ -52,6 +52,10 @@
 #include <linux/errno.h>
 #include <asm/atomic.h>
 #include <linux/device.h>
+#ifdef __powerpc__
+#include <dev/ofw/ofw_bus_subr.h>
+#include <dev/ofw/ofwpci.h>
+#endif
 
 struct pci_device_id {
 	uint32_t	vendor;
@@ -266,7 +270,12 @@ pci_resource_start(struct pci_dev *pdev, int bar)
 
 	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
 		return (0);
+#ifdef __powerpc__
+	return ofw_pci_translate_resource(device_get_parent(pdev->dev.bsddev),
+			   rle->type, rle->start);
+#else
 	return rle->start;
+#endif
 }
 
 static inline unsigned long

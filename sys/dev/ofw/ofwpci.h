@@ -83,5 +83,6 @@ int ofw_pci_read_ivar(device_t, device_t, int, uintptr_t *);
 int ofw_pci_write_ivar(device_t, device_t, int, uintptr_t);
 int ofw_pci_route_interrupt(device_t, device_t, int);
 int ofw_pci_nranges(phandle_t, struct ofw_pci_cell_info *);
+vm_paddr_t ofw_pci_translate_resource(device_t, int, vm_paddr_t);
 
 #endif /* _DEV_OFW_OFWPCI_H_ */
