@@ -166,6 +166,7 @@ linux_pci_attach(device_t dev)
 		pbus = malloc(sizeof(*pbus), M_DEVBUF, M_WAITOK | M_ZERO);
 		pbus->self = pdev;
 		pbus->number = pci_get_bus(dev);
+		pbus->domain = pci_get_domain(dev);
 		pdev->bus = pbus;
 	}
 
@@ -285,11 +286,14 @@ pci_resource_start(struct pci_dev *pdev, int bar)
 {
 	struct resource_list_entry *rle;
 	unsigned long newstart;
+	device_t dev;
 
 	if ((rle = linux_pci_get_bar(pdev, bar)) == NULL)
 		return (0);
-	if (bus_translate_resource(pdev->dev.bsddev,
-		    rle->type, rle->start, &newstart)) {
+	dev = pci_find_dbsf(pdev->bus->domain, pdev->bus->number,
+						PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
+	MPASS(dev != NULL);
+	if (bus_translate_resource(dev, rle->type, rle->start, &newstart)) {
 		device_printf(pdev->dev.bsddev, "translate of %#lx failed\n",
 			rle->start);
 		return (0);

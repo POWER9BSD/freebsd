@@ -193,6 +193,7 @@ struct pci_driver {
 
 struct pci_bus {
 	struct pci_dev	*self;
+	int		domain;
 	int		number;
 };
 
