@@ -5609,7 +5609,9 @@ mmu_radix_pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 	ppa = trunc_page(pa);
 	offset = pa & PAGE_MASK;
 	size = roundup2(offset + size, PAGE_SIZE);
-
+	if (pa < powerpc_ptob(Maxmem))
+		panic("bad pa: %#lx less than Maxmem %#lx\n",
+			  pa, powerpc_ptob(Maxmem));
 	va = kva_alloc(size);
 	if (bootverbose)
 		printf("%s(%#lx, %lu, %d)\n", __func__, pa, size, attr);
@@ -5717,8 +5719,6 @@ static pt_entry_t
 mmu_radix_calc_wimg(vm_paddr_t pa, vm_memattr_t ma)
 {
 
-	if (bootverbose)
-		printf("%s pa=%lx ma=%x\n", __func__, pa, ma);
 	if (ma != VM_MEMATTR_DEFAULT) {
 		switch (ma) {
 		case VM_MEMATTR_UNCACHEABLE:
@@ -5755,8 +5755,6 @@ mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma)
 	pteval = pa | RPTE_EAA_R | RPTE_EAA_W | RPTE_EAA_P | PG_M | PG_A;
 	cache_bits = mmu_radix_calc_wimg(pa, ma);
 	pte_store(pte, pteval | cache_bits);
-	if (bootverbose)
-		printf("va/*pte %#lx/%#lx\n", va, *pte);
 }
 
 VISIBILITY void
