@@ -4516,6 +4516,21 @@ bus_activate_resource(device_t dev, int type, int rid, struct resource *r)
 }
 
 /**
+ * @brief Wrapper function for BUS_ADJUST_RESOURCE().
+ *
+ * This function simply calls the BUS_ADJUST_RESOURCE() method of the
+ * parent of @p dev.
+ */
+int
+bus_translate_resource(device_t dev, int type, rman_res_t start,
+	rman_res_t *newstart)
+{
+	if (dev->parent == NULL)
+		return (EINVAL);
+	return (BUS_TRANSLATE_RESOURCE(dev->parent, type, start, newstart));
+}
+
+/**
  * @brief Wrapper function for BUS_DEACTIVATE_RESOURCE().
  *
  * This function simply calls the BUS_DEACTIVATE_RESOURCE() method of the
@@ -5467,7 +5482,7 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
     struct thread *td)
 {
 	struct devreq *req;
-	device_t dev;
+	device_t dev = NULL;
 	int error, old;
 
 	/* Locate the device to control. */

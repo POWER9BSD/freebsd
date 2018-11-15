@@ -77,6 +77,8 @@ static int ofw_pci_deactivate_resource(device_t, device_t, int, int,
     struct resource *);
 static int ofw_pci_adjust_resource(device_t, device_t, int,
     struct resource *, rman_res_t, rman_res_t);
+static int ofw_pci_translate_resource(device_t bus, int type,
+	rman_res_t start, rman_res_t *newstart);
 
 #ifdef __powerpc__
 static bus_space_tag_t ofw_pci_bus_get_bus_tag(device_t, device_t);
@@ -117,6 +119,7 @@ static device_method_t	ofw_pci_methods[] = {
 	DEVMETHOD(bus_activate_resource,	ofw_pci_activate_resource),
 	DEVMETHOD(bus_deactivate_resource,	ofw_pci_deactivate_resource),
 	DEVMETHOD(bus_adjust_resource,	ofw_pci_adjust_resource),
+	DEVMETHOD(bus_translate_resource,	ofw_pci_translate_resource),
 #ifdef __powerpc__
 	DEVMETHOD(bus_get_bus_tag,	ofw_pci_bus_get_bus_tag),
 #endif
@@ -482,8 +485,9 @@ ofw_pci_release_resource(device_t bus, device_t child, int type, int rid,
 	return (rman_release_resource(res));
 }
 
-vm_paddr_t
-ofw_pci_translate_resource(device_t bus, int type, vm_paddr_t start)
+static int
+ofw_pci_translate_resource(device_t bus, int type, rman_res_t start,
+	rman_res_t *newstart)
 {
 	struct ofw_pci_softc *sc;
 	struct ofw_pci_range *rp;
@@ -516,7 +520,8 @@ ofw_pci_translate_resource(device_t bus, int type, vm_paddr_t start)
 			break;
 		}
 	}
-	return (start);
+	*newstart = start;
+	return (0);
 }
 
 static int

@@ -523,6 +523,8 @@ int	bus_map_resource(device_t dev, int type, struct resource *r,
 			 struct resource_map *map);
 int	bus_unmap_resource(device_t dev, int type, struct resource *r,
 			   struct resource_map *map);
+int	bus_translate_resource(device_t dev, int type, rman_res_t start,
+			      rman_res_t *newstart);
 int	bus_get_cpus(device_t dev, enum cpu_sets op, size_t setsize,
 		     struct _cpuset *cpuset);
 bus_dma_tag_t bus_get_dma_tag(device_t dev);
