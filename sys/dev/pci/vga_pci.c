@@ -147,7 +147,9 @@ void *
 vga_pci_map_bios(device_t dev, size_t *size)
 {
 	struct resource *res;
+	device_t pcib;
 	uint32_t rom_addr;
+	uint16_t config;
 	int rid;
 
 #if defined(__amd64__) || defined(__i386__)
@@ -165,6 +167,20 @@ vga_pci_map_bios(device_t dev, size_t *size)
 		return (pmap_mapbios(VGA_PCI_BIOS_SHADOW_ADDR, *size));
 	}
 #endif
+
+	pcib = device_get_parent(device_get_parent(dev));
+	if (device_get_devclass(device_get_parent(pcib)) ==
+	    devclass_find("pci")) {
+		/*
+		 * The parent bridge is a PCI-to-PCI bridge: check the
+		 * value of the "VGA Enable" bit.
+		 */
+		config = pci_read_config(pcib, PCIR_BRIDGECTL_1, 2);
+		if ((config & PCIB_BCR_VGA_ENABLE) == 0) {
+			config |= PCIB_BCR_VGA_ENABLE;
+			pci_write_config(pcib, PCIR_BRIDGECTL_1, config, 2);
+		}
+	}
 
 	switch(pci_read_config(dev, PCIR_HDRTYPE, 1)) {
 	case PCIM_HDRTYPE_BRIDGE:
