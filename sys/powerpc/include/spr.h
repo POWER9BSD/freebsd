@@ -536,6 +536,8 @@
 #define	SPR_HID5		0x3f6	/* ..8 Hardware Implementation Register 5 */
 #define	SPR_HID6		0x3f9	/* ..8 Hardware Implementation Register 6 */
 
+#define	HID0_SPECEXEC		(1ULL<<52) /* enable speculative execution */
+
 #define	SPR_CELL_TSRL		0x380	/* ... Cell BE Thread Status Register */
 #define	SPR_CELL_TSCR		0x399	/* ... Cell BE Thread Switch Register */
 

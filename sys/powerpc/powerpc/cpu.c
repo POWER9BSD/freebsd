@@ -669,6 +669,10 @@ cpu_powerx_setup(int cpuid, uint16_t vers)
 		cpu_idle_hook = cpu_idle_power9;
 		mtspr(SPR_LPCR, mfspr(SPR_LPCR) | LPCR_PECE_WAKESET);
 		isync();
+#ifndef NO_SPECEXEC
+		mtspr(SPR_HID0, mfspr(SPR_HID0) | HID0_SPECEXEC);
+		isync();
+#endif
 		break;
 	default:
 		return;

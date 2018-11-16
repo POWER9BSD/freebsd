@@ -98,6 +98,11 @@ cpudep_ap_early_bootstrap(void)
 
 			mtspr(SPR_LPCR, lpcr);
 			isync();
+
+#ifndef NO_SPECEXEC
+			mtspr(SPR_HID0, mfspr(SPR_HID0) | HID0_SPECEXEC);
+			isync();
+#endif
 		}
 #endif
 		break;
