@@ -749,10 +749,10 @@ pmap_cache_bits(vm_memattr_t ma)
 	if (ma != VM_MEMATTR_DEFAULT) {
 		switch (ma) {
 		case VM_MEMATTR_UNCACHEABLE:
+		case VM_MEMATTR_WRITE_COMBINING:
 			return (RPTE_ATTR_GUARDEDIO);
 		case VM_MEMATTR_CACHEABLE:
 			return (RPTE_ATTR_MEM);
-		case VM_MEMATTR_WRITE_COMBINING:
 		case VM_MEMATTR_WRITE_BACK:
 		case VM_MEMATTR_PREFETCHABLE:
 			return (RPTE_ATTR_UNGUARDEDIO);
@@ -5797,10 +5797,10 @@ mmu_radix_calc_wimg(vm_paddr_t pa, vm_memattr_t ma)
 		case VM_MEMATTR_UNCACHEABLE:
 			return (RPTE_ATTR_GUARDEDIO);
 		case VM_MEMATTR_CACHEABLE:
-			return (RPTE_ATTR_MEM);
-		case VM_MEMATTR_WRITE_COMBINING:
 		case VM_MEMATTR_WRITE_BACK:
 		case VM_MEMATTR_PREFETCHABLE:
+			return (RPTE_ATTR_MEM);
+		case VM_MEMATTR_WRITE_COMBINING:
 			return (RPTE_ATTR_UNGUARDEDIO);
 		}
 	}
@@ -5812,7 +5812,7 @@ mmu_radix_calc_wimg(vm_paddr_t pa, vm_memattr_t ma)
 	for (int i = 0; i < pregions_sz; i++) {
 		if ((pa >= pregions[i].mr_start) &&
 		    (pa < (pregions[i].mr_start + pregions[i].mr_size)))
-			return (0);
+			return (RPTE_ATTR_MEM);
 	}
 	return (RPTE_ATTR_GUARDEDIO);
 }
