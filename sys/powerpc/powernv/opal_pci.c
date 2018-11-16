@@ -96,6 +96,9 @@ static int opalpci_route_interrupt(device_t bus, device_t dev, int pin);
 static void opalpic_pic_enable(device_t dev, u_int irq, u_int vector);
 static void opalpic_pic_eoi(device_t dev, u_int irq);
 
+/* Bus interface */
+static bus_dma_tag_t opalpci_get_dma_tag(device_t dev, device_t child);
+
 /*
  * Commands
  */
@@ -119,6 +122,8 @@ static void opalpic_pic_eoi(device_t dev, u_int irq);
  */
 #define OPAL_PCI_DEFAULT_PE			1
 
+#define OPAL_PCI_BUS_SPACE_LOWADDR_32BIT	0x7FFFFFFFUL
+
 /*
  * Driver methods.
  */
@@ -138,13 +143,14 @@ static device_method_t	opalpci_methods[] = {
 	DEVMETHOD(pcib_map_msi,		opalpci_map_msi),
 	DEVMETHOD(pcib_route_interrupt,	opalpci_route_interrupt),
 
-	/* Bus interface */
-	DEVMETHOD(bus_get_cpus,		ofw_pcibus_get_cpus),
-	DEVMETHOD(bus_get_domain,	ofw_pcibus_get_domain),
-
 	/* PIC interface for MSIs */
 	DEVMETHOD(pic_enable,		opalpic_pic_enable),
 	DEVMETHOD(pic_eoi,		opalpic_pic_eoi),
+
+	/* Bus interface */
+	DEVMETHOD(bus_get_dma_tag,	opalpci_get_dma_tag),
+	DEVMETHOD(bus_get_cpus,         ofw_pcibus_get_cpus),
+	DEVMETHOD(bus_get_domain,       ofw_pcibus_get_domain),
 
 	DEVMETHOD_END
 };
@@ -363,7 +369,7 @@ opalpci_attach(device_t dev)
 	tce_size = max_tce_size(dev);
 	maxmem = roundup2(powerpc_ptob(Maxmem), tce_size);
 	entries = round_pow2(maxmem / tce_size);
-	tce_tbl_size = MAX(entries * sizeof(uint64_t), 4096);
+	tce_tbl_size = max(entries * sizeof(uint64_t), 4096);
 	if (entries > OPAL_PCI_TCE_MAX_ENTRIES)
 		panic("POWERNV supports only %jdGB of memory space\n",
 		    (uintmax_t)((OPAL_PCI_TCE_MAX_ENTRIES * tce_size) >> 30));
@@ -687,4 +693,13 @@ static void opalpic_pic_eoi(device_t dev, u_int irq)
 	opal_call(OPAL_PCI_MSI_EOI, sc->phb_id, irq);
 
 	PIC_EOI(root_pic, irq);
+}
+
+static bus_dma_tag_t
+opalpci_get_dma_tag(device_t dev, device_t child)
+{
+	struct opalpci_softc *sc;
+
+	sc = device_get_softc(dev);
+	return (sc->ofw_sc.sc_dmat);
 }
