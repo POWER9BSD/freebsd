@@ -1182,15 +1182,15 @@ void cam_iosched_sysctl_init(struct cam_iosched_softc *isc,
 #endif
 }
 
+#ifdef CAM_IOSCHED_DYNAMIC
 void
 cam_iosched_set_latfcn(struct cam_iosched_softc *isc,
     cam_iosched_latfcn_t fnp, void *argp)
 {
-#ifdef CAM_IOSCHED_DYNAMIC
 	isc->latfcn = fnp;
 	isc->latarg = argp;
-#endif
 }
+#endif
 
 /*
  * Flush outstanding I/O. Consumers of this library don't know all the
