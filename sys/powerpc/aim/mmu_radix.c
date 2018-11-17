@@ -3807,8 +3807,6 @@ mmu_radix_pmap_page_exists_quick(pmap_t pmap, vm_page_t m)
 	int loops = 0;
 	boolean_t rv;
 
-	UNTESTED();
-
 	KASSERT((m->oflags & VPO_UNMANAGED) == 0,
 	    ("pmap_page_exists_quick: page %p is not managed", m));
 	CTR3(KTR_PMAP, "%s(%p, %p)", __func__, pmap, m);
