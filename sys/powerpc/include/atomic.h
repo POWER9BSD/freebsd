@@ -522,6 +522,8 @@ atomic_store_rel_##TYPE(volatile u_##TYPE *p, u_##TYPE v)	\
 	*p = v;							\
 }
 
+ATOMIC_STORE_LOAD(char)
+ATOMIC_STORE_LOAD(short)
 ATOMIC_STORE_LOAD(int)
 
 #define	atomic_load_acq_32	atomic_load_acq_int
