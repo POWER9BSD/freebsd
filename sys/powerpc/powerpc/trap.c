@@ -427,11 +427,7 @@ trap(struct trapframe *frame)
 			break;
 #endif
 		case EXC_DSI:
-			if (td->td_pflags & TDP_UNUSED9)
-				trap_fatal(frame);
-			td->td_pflags |= TDP_UNUSED9;
 			rv = trap_pfault(frame, 0);
-			td->td_pflags &= ~TDP_UNUSED9;
 			if (rv == 0)
  				return;
 
@@ -490,6 +486,7 @@ cpu_printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 	case EXC_DSE:
 	case EXC_DSI:
 	case EXC_DTMISS:
+	case EXC_ALI:
 		printf("   dsisr           = 0x%lx\n",
 		    (u_long)frame->cpu.aim.dsisr);
 		break;
@@ -529,6 +526,7 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 	case EXC_DSE:
 	case EXC_DSI:
 	case EXC_DTMISS:
+	case EXC_ALI:
 		printf("   virtual address = 0x%" PRIxPTR "\n", frame->dar);
 		break;
 	case EXC_ISE:
