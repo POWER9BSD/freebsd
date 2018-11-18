@@ -42,39 +42,6 @@ typedef struct {
 	volatile int counter;
 } atomic_t;
 
-/*------------------------------------------------------------------------*
- *	32-bit atomic operations
- *------------------------------------------------------------------------*/
-
-#define	atomic_add(i, v)		atomic_add_return((i), (v))
-#define	atomic_sub(i, v)		atomic_sub_return((i), (v))
-#define	atomic_inc_return(v)		atomic_add_return(1, (v))
-#define	atomic_add_negative(i, v)	(atomic_add_return((i), (v)) < 0)
-#define	atomic_add_and_test(i, v)	(atomic_add_return((i), (v)) == 0)
-#define	atomic_sub_and_test(i, v)	(atomic_sub_return((i), (v)) == 0)
-#define	atomic_dec_and_test(v)		(atomic_sub_return(1, (v)) == 0)
-#define	atomic_inc_and_test(v)		(atomic_add_return(1, (v)) == 0)
-#define	atomic_dec_return(v)		atomic_sub_return(1, (v))
-#define	atomic_inc_not_zero(v)		atomic_add_unless((v), 1, 0)
-
-static inline int
-atomic_add_return(int i, atomic_t *v)
-{
-	return i + atomic_fetchadd_int(&v->counter, i);
-}
-
-static inline int
-atomic_sub_return(int i, atomic_t *v)
-{
-	return atomic_fetchadd_int(&v->counter, -i) - i;
-}
-
-static inline void
-atomic_set(atomic_t *v, int i)
-{
-	WRITE_ONCE(v->counter, i);
-}
-
 static inline void
 atomic_set_release(atomic_t *v, int i)
 {
@@ -85,12 +52,6 @@ static inline void
 atomic_set_mask(unsigned int mask, atomic_t *v)
 {
 	atomic_set_int(&v->counter, mask);
-}
-
-static inline int
-atomic_read(const atomic_t *v)
-{
-	return READ_ONCE(v->counter);
 }
 
 static inline int
@@ -105,218 +66,73 @@ atomic_dec(atomic_t *v)
 	return atomic_fetchadd_int(&v->counter, -1) - 1;
 }
 
-static inline int
-atomic_add_unless(atomic_t *v, int a, int u)
-{
-	int c = atomic_read(v);
-
-	for (;;) {
-		if (unlikely(c == u))
-			break;
-		if (likely(atomic_fcmpset_int(&v->counter, &c, c + a)))
-			break;
-	}
-	return (c != u);
-}
-
 static inline void
 atomic_clear_mask(unsigned int mask, atomic_t *v)
 {
 	atomic_clear_int(&v->counter, mask);
 }
 
-static inline int
-atomic_xchg(atomic_t *v, int i)
-{
-#if !defined(__mips__)
-	return (atomic_swap_int(&v->counter, i));
-#else
-	int ret = atomic_read(v);
-
-	while (!atomic_fcmpset_int(&v->counter, &ret, i))
-		;
-	return (ret);
-#endif
-}
-
-static inline int
-atomic_cmpxchg(atomic_t *v, int old, int new)
-{
-	int ret = old;
-
-	for (;;) {
-		if (atomic_fcmpset_int(&v->counter, &ret, new))
-			break;
-		if (ret != old)
-			break;
-	}
-	return (ret);
-}
-
 #ifdef __powerpc__
-#include <asm/powerpc_atomic.h>
-
+#include <powerpc/atomic.h>
 #else
-
-#if defined(__amd64__) || defined(__arm64__) || defined(__i386__)
-#define	LINUXKPI_ATOMIC_8(...) __VA_ARGS__
-#define	LINUXKPI_ATOMIC_16(...) __VA_ARGS__
-#else
-#define	LINUXKPI_ATOMIC_8(...)
-#define	LINUXKPI_ATOMIC_16(...)
+#include <x86/atomic.h>
 #endif
 
-#if !(defined(i386) || (defined(__mips__) && !(defined(__mips_n32) ||	\
-    defined(__mips_n64))) || (defined(__powerpc__) &&			\
-    !defined(__powerpc64__)))
-#define	LINUXKPI_ATOMIC_64(...) __VA_ARGS__
-#else
-#define	LINUXKPI_ATOMIC_64(...)
-#endif
 
-#define	cmpxchg(ptr, old, new) ({					\
-	union {								\
-		__typeof(*(ptr)) val;					\
-		u8 u8[0];						\
-		u16 u16[0];						\
-		u32 u32[0];						\
-		u64 u64[0];						\
-	} __ret = { .val = (old) }, __new = { .val = (new) };		\
-									\
-	CTASSERT(							\
-	    LINUXKPI_ATOMIC_8(sizeof(__ret.val) == 1 ||)		\
-	    LINUXKPI_ATOMIC_16(sizeof(__ret.val) == 2 ||)		\
-	    LINUXKPI_ATOMIC_64(sizeof(__ret.val) == 8 ||)		\
-	    sizeof(__ret.val) == 4);					\
-									\
-	switch (sizeof(__ret.val)) {					\
-	LINUXKPI_ATOMIC_8(						\
-	case 1:								\
-		while (!atomic_fcmpset_8((volatile u8 *)(ptr),		\
-		    __ret.u8, __new.u8[0]) && __ret.val == (old))	\
-			;						\
-		break;							\
-	)								\
-	LINUXKPI_ATOMIC_16(						\
-	case 2:								\
-		while (!atomic_fcmpset_16((volatile u16 *)(ptr),	\
-		    __ret.u16, __new.u16[0]) && __ret.val == (old))	\
-			;						\
-		break;							\
-	)								\
-	case 4:								\
-		while (!atomic_fcmpset_32((volatile u32 *)(ptr),	\
-		    __ret.u32, __new.u32[0]) && __ret.val == (old))	\
-			;						\
-		break;							\
-	LINUXKPI_ATOMIC_64(						\
-	case 8:								\
-		while (!atomic_fcmpset_64((volatile u64 *)(ptr),	\
-		    __ret.u64, __new.u64[0]) && __ret.val == (old))	\
-			;						\
-		break;							\
-	)								\
-	}								\
-	__ret.val;							\
+#define __atomic_op_fence(op, args...)					\
+({									\
+	typeof(op##_relaxed(args)) __ret;				\
+	mb();											\
+	__ret = op##_relaxed(args);						\
+	mb();											\
+	__ret;								\
 })
 
-#define	cmpxchg_relaxed(...)	cmpxchg(__VA_ARGS__)
+#define atomic_xchg(ptr, v)		(xchg(&(ptr)->counter, (v)))
+#define atomic_cmpxchg(v, old, new)	(cmpxchg(&((v)->counter), (old), (new)))
 
-#define	xchg(ptr, new) ({						\
-	union {								\
-		__typeof(*(ptr)) val;					\
-		u8 u8[0];						\
-		u16 u16[0];						\
-		u32 u32[0];						\
-		u64 u64[0];						\
-	} __ret, __new = { .val = (new) };				\
-									\
-	CTASSERT(							\
-	    LINUXKPI_ATOMIC_8(sizeof(__ret.val) == 1 ||)		\
-	    LINUXKPI_ATOMIC_16(sizeof(__ret.val) == 2 ||)		\
-	    LINUXKPI_ATOMIC_64(sizeof(__ret.val) == 8 ||)		\
-	    sizeof(__ret.val) == 4);					\
-									\
-	switch (sizeof(__ret.val)) {					\
-	LINUXKPI_ATOMIC_8(						\
-	case 1:								\
-		__ret.val = READ_ONCE(*ptr);				\
-		while (!atomic_fcmpset_8((volatile u8 *)(ptr),		\
-	            __ret.u8, __new.u8[0]))				\
-			;						\
-		break;							\
-	)								\
-	LINUXKPI_ATOMIC_16(						\
-	case 2:								\
-		__ret.val = READ_ONCE(*ptr);				\
-		while (!atomic_fcmpset_16((volatile u16 *)(ptr),	\
-	            __ret.u16, __new.u16[0]))				\
-			;						\
-		break;							\
-	)								\
-	case 4:								\
-		__ret.u32[0] = atomic_swap_32((volatile u32 *)(ptr),	\
-		    __new.u32[0]);					\
-		break;							\
-	LINUXKPI_ATOMIC_64(						\
-	case 8:								\
-		__ret.u64[0] = atomic_swap_64((volatile u64 *)(ptr),	\
-		    __new.u64[0]);					\
-		break;							\
-	)								\
-	}								\
-	__ret.val;							\
-})
-
+#ifndef atomic_andnot
+#define atomic_andnot(i, v)		atomic_and(~(int)(i), (v))
 #endif
 
-static inline int
-atomic_dec_if_positive(atomic_t *v)
-{
-	int retval;
-	int old;
+#ifndef atomic_add_return
+#define  atomic_add_return(...)						\
+	__atomic_op_fence(atomic_add_return, __VA_ARGS__)
+#endif
 
-	old = atomic_read(v);
-	for (;;) {
-		retval = old - 1;
-		if (unlikely(retval < 0))
-			break;
-		if (likely(atomic_fcmpset_int(&v->counter, &old, retval)))
-			break;
-	}
-	return (retval);
-}
+#ifndef atomic_sub_return
+#define  atomic_sub_return(...)						\
+	__atomic_op_fence(atomic_sub_return, __VA_ARGS__)
+#endif
 
-#define	LINUX_ATOMIC_OP(op, c_op)				\
-static inline void atomic_##op(int i, atomic_t *v)		\
-{								\
-	int c, old;						\
-								\
-	c = v->counter;						\
-	while ((old = atomic_cmpxchg(v, c, c c_op i)) != c)	\
-		c = old;					\
-}
+#ifndef atomic_fetch_or
+#define atomic_fetch_or(...)						\
+	__atomic_op_fence(atomic_fetch_or, __VA_ARGS__)
+#endif
 
-#define	LINUX_ATOMIC_FETCH_OP(op, c_op)				\
-static inline int atomic_fetch_##op(int i, atomic_t *v)		\
-{								\
-	int c, old;						\
-								\
-	c = v->counter;						\
-	while ((old = atomic_cmpxchg(v, c, c c_op i)) != c)	\
-		c = old;					\
-								\
-	return (c);						\
-}
+#ifndef atomic_fetch_and
+#define atomic_fetch_and(...)						\
+	__atomic_op_fence(atomic_fetch_and, __VA_ARGS__)
+#endif
 
-LINUX_ATOMIC_OP(or, |)
-LINUX_ATOMIC_OP(and, &)
-LINUX_ATOMIC_OP(andnot, &~)
-LINUX_ATOMIC_OP(xor, ^)
+#ifndef atomic_fetch_andnot
+#define atomic_fetch_andnot(i, v)		atomic_fetch_and(~(int)(i), (v))
+#endif
 
-LINUX_ATOMIC_FETCH_OP(or, |)
-LINUX_ATOMIC_FETCH_OP(and, &)
-LINUX_ATOMIC_FETCH_OP(andnot, &~)
-LINUX_ATOMIC_FETCH_OP(xor, ^)
+/*------------------------------------------------------------------------*
+ *	32-bit atomic operations
+ *------------------------------------------------------------------------*/
+
+#define	atomic_add(i, v)		atomic_add_return((i), (v))
+#define	atomic_sub(i, v)		atomic_sub_return((i), (v))
+#define	atomic_inc_return(v)		atomic_add_return(1, (v))
+#define	atomic_add_negative(i, v)	(atomic_add_return((i), (v)) < 0)
+#define	atomic_add_and_test(i, v)	(atomic_add_return((i), (v)) == 0)
+#define	atomic_sub_and_test(i, v)	(atomic_sub_return((i), (v)) == 0)
+#define	atomic_dec_and_test(v)		(atomic_sub_return(1, (v)) == 0)
+#define	atomic_inc_and_test(v)		(atomic_add_return(1, (v)) == 0)
+#define	atomic_dec_return(v)		atomic_sub_return(1, (v))
+#define	atomic_add_unless(v, a, u)	atomic_fetch_add_unless((v), (a), (u))
+#define	atomic_inc_not_zero(v)		atomic_add_unless((v), 1, 0)
 
 #endif					/* _ASM_ATOMIC_H_ */

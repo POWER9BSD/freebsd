@@ -9,6 +9,45 @@
 #define PPC_ATOMIC_EXIT_BARRIER "\n"
 #endif
 
+static inline int
+atomic_read(const atomic_t *v)
+{
+	int t;
+
+	__asm __volatile("lwz%U1%X1 %0,%1" : "=r"(t) : "m"(v->counter));
+
+	return t;
+}
+
+static inline void
+atomic_set(atomic_t *v, int i)
+{
+	__asm __volatile("stw%U0%X0 %1,%0" : "=m"(v->counter) : "r"(i));
+}
+
+static inline int
+atomic_dec_if_positive(atomic_t *v)
+{
+	int retval;
+
+	__asm __volatile(
+	PPC_ATOMIC_ENTRY_BARRIER
+"1:	lwarx	%0,0,%1		# atomic_dec_if_positive\n\
+	cmpwi	%0,1\n\
+	addi	%0,%0,-1\n\
+	blt-	2f\n"
+"	stwcx.	%0,0,%1\n\
+	bne-	1b\n"
+	PPC_ATOMIC_EXIT_BARRIER
+"2:": "=&b" (retval)
+	: "r" (&v->counter)
+	: "cc", "memory");
+
+	return (retval);
+}
+
+#define atomic_dec_if_positive atomic_dec_if_positive
+
 static __always_inline uint8_t
 __cmpxchg_u8(volatile uint8_t* p, uint8_t old, uint8_t new)
 {
@@ -345,11 +384,94 @@ __xchg_u64_relaxed(volatile uint64_t* p, uint64_t new)
   })
 
 
-
-#define atomic_cmpxchg(v, o, n) (cmpxchg(&((v)->counter), (o), (n)))
-#define atomic_cmpxchg_relaxed(v, o, n) \
-	cmpxchg_relaxed(&((v)->counter), (o), (n))
-
-#define atomic_xchg(v, new) (xchg(&((v)->counter), new))
+#define atomic_cmpxchg_relaxed(v, o, n) cmpxchg_relaxed(&((v)->counter), (o), (n))
 #define atomic_xchg_relaxed(v, new) xchg_relaxed(&((v)->counter), (new))
+
+
+static inline int
+atomic_fetch_add_unless(atomic_t *v, int a, int u)
+{
+	int c;
+
+	__asm__ __volatile__ (
+	PPC_ATOMIC_ENTRY_BARRIER
+"1:	lwarx	%0,0,%1		# atomic_fetch_add_unless\n"
+"	cmpw	0,%0,%3 \n"
+"	beq	2f \n"
+"	add	%0,%2,%0 \n"
+"	stwcx.	%0,0,%1 \n"
+"	bne-	1b \n"
+	PPC_ATOMIC_EXIT_BARRIER
+"	subf	%0,%2,%0 \n"
+"2:"
+	: "=&r" (c)
+	: "r" (&v->counter), "r" (a), "r" (u)
+	: "cc", "memory");
+
+	return (c);
+}
+
+#define LINUX_ATOMIC_OP_RETURN_RELAXED(op, asm_op)									\
+static inline int atomic_##op##_return_relaxed(int i, atomic_t *v)	\
+{									\
+	int c;								\
+									\
+	__asm__ __volatile__(						\
+"1:	lwarx	%0,0,%3		# atomic_" #op "_return_relaxed\n"	\
+	#asm_op " %0,%2,%0\n"						\
+"	stwcx.	%0,0,%3\n"						\
+"	bne-	1b\n"							\
+	: "=&r" (c), "+m" (v->counter)					\
+	: "r" (i), "r" (&v->counter)					\
+	: "cc");							\
+									\
+	return (c);					\
+}
+
+#define LINUX_ATOMIC_OP(op)									\
+static inline void atomic_##op(int i, atomic_t *v)			\
+{														\
+	atomic_##op##_return_relaxed(i, v);					\
+}
+
+
+#define LINUX_ATOMIC_FETCH_OP_RELAXED(op, asm_op)	\
+static inline int atomic_fetch_##op##_relaxed(int i, atomic_t *v)	\
+{									\
+	int c, old;							\
+									\
+	__asm__ __volatile__(						\
+"1:	lwarx	%0,0,%4		# atomic_fetch_" #op "_relaxed\n"	\
+	#asm_op " %1,%3,%0\n"						\
+    "	stwcx.	%1,0,%4\n"						\
+    "	bne-	1b\n"							\
+    : "=&r" (old), "=&r" (c), "+m" (v->counter)			\
+	: "r" (i), "r" (&v->counter)					\
+	: "cc");							\
+									\
+	return (old);					\
+}
+
+#define LINUX_ATOMIC_OPS(op, asm_op)			\
+	  LINUX_ATOMIC_OP_RETURN_RELAXED(op, asm_op)	\
+	  LINUX_ATOMIC_OP(op)						\
+	  LINUX_ATOMIC_FETCH_OP_RELAXED(op, asm_op)
+
+
+LINUX_ATOMIC_OPS(add, add)
+LINUX_ATOMIC_OPS(sub, subf)
+
+LINUX_ATOMIC_OPS(and, and)
+LINUX_ATOMIC_OPS(or, or)
+LINUX_ATOMIC_OPS(xor, xor)
+
+#define atomic_add_return_relaxed atomic_add_return_relaxed
+#define atomic_sub_return_relaxed atomic_sub_return_relaxed
+
+#define atomic_fetch_add_relaxed atomic_fetch_add_relaxed
+#define atomic_fetch_sub_relaxed atomic_fetch_sub_relaxed
+
+#define atomic_fetch_and_relaxed atomic_fetch_and_relaxed
+#define atomic_fetch_or_relaxed  atomic_fetch_or_relaxed
+#define atomic_fetch_xor_relaxed atomic_fetch_xor_relaxed
 #endif
