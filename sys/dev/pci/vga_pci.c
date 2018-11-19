@@ -143,14 +143,35 @@ vga_pci_is_boot_display(device_t dev)
 	return (1);
 }
 
+static void
+vga_pci_reset(device_t dev)
+{
+	int ps;
+	/*
+	 * FLR is unsupported on GPUs so attempt a power-management reset by cycling
+	 * the device in/out of D3 state.
+	 * PCI spec says we can only go into D3 state from D0 state.
+	 * Transition from D[12] into D0 before going to D3 state.
+	 */
+	ps = pci_get_powerstate(dev);
+	if (ps != PCI_POWERSTATE_D0 && ps != PCI_POWERSTATE_D3)
+		pci_set_powerstate(dev, PCI_POWERSTATE_D0);
+	if (pci_get_powerstate(dev) != PCI_POWERSTATE_D3)
+		pci_set_powerstate(dev, PCI_POWERSTATE_D3);
+	pci_set_powerstate(dev, ps);
+}
+
+
 void *
 vga_pci_map_bios(device_t dev, size_t *size)
 {
+	struct vga_resource *vr;
 	struct resource *res;
 	device_t pcib;
 	uint32_t rom_addr;
 	uint16_t config;
-	int rid;
+	char *bios;
+	int i, rid, found;
 
 #if defined(__amd64__) || defined(__i386__)
 	if (vga_pci_is_boot_display(dev)) {
@@ -199,25 +220,67 @@ vga_pci_map_bios(device_t dev, size_t *size)
 	    ~0, 1, RF_ACTIVE);
 
 	if (res == NULL) {
-		printf("vga_pci_alloc_resource failed\n");
+		device_printf(dev, "vga_pci_alloc_resource failed\n");
 		return (NULL);
 	}
+	bios = rman_get_virtual(res);
+	*size = rman_get_size(res);
+	for (found = i = 0; i < hz; i++) {
+		found = (atomic_load_acq_char(&bios[0]) == 0x55 &&
+				 atomic_load_acq_char(&bios[1]) == 0xaa);
+		if (found)
+			break;
+		pause("vgabios", 1);
+	}
+	if (found)
+		return (bios);
+	if (bootverbose)
+		device_printf(dev, "initial rom mapping failed -- resetting\n");
+
 	/*
 	 * Enable ROM decode
 	 */
+	vga_pci_reset(dev);
 	rom_addr = pci_read_config(dev, rid, 4);
 	rom_addr &= 0x7ff;
 	rom_addr |= rman_get_start(res) | 0x1;
 	pci_write_config(dev, rid, rom_addr, 4);
+	vr = lookup_res(device_get_softc(dev), rid);
+	vga_pci_release_resource(dev, NULL, SYS_RES_MEMORY, rid,
+	    vr->vr_res);
 
+	/*
+	 * re-allocate
+	 */
+	res = vga_pci_alloc_resource(dev, NULL, SYS_RES_MEMORY, &rid, 0,
+	    ~0, 1, RF_ACTIVE);
+	if (res == NULL) {
+		device_printf(dev, "vga_pci_alloc_resource failed\n");
+		return (NULL);
+	}
+	bios = rman_get_virtual(res);
 	*size = rman_get_size(res);
-	return (rman_get_virtual(res));
+	for (found = i = 0; i < 3*hz; i++) {
+		found = (atomic_load_acq_char(&bios[0]) == 0x55 &&
+				 atomic_load_acq_char(&bios[1]) == 0xaa);
+		if (found)
+			break;
+		pause("vgabios", 1);
+	}
+	if (found)
+		return (bios);
+	device_printf(dev, "rom mapping failed\n");
+	vr = lookup_res(device_get_softc(dev), rid);
+	vga_pci_release_resource(dev, NULL, SYS_RES_MEMORY, rid,
+	    vr->vr_res);
+	return (NULL);
 }
 
 void
 vga_pci_unmap_bios(device_t dev, void *bios)
 {
 	struct vga_resource *vr;
+	int rid;
 
 	if (bios == NULL) {
 		return;
@@ -231,16 +294,28 @@ vga_pci_unmap_bios(device_t dev, void *bios)
 		return;
 	}
 #endif
-
+	switch(pci_read_config(dev, PCIR_HDRTYPE, 1)) {
+	case PCIM_HDRTYPE_BRIDGE:
+		rid = PCIR_BIOS_1;
+		break;
+	case PCIM_HDRTYPE_CARDBUS:
+		rid = 0;
+		break;
+	default:
+		rid = PCIR_BIOS;
+		break;
+	}
+	if (rid == 0)
+		return;
 	/*
 	 * Look up the PCIR_BIOS resource in our softc.  It should match
 	 * the address we returned previously.
 	 */
-	vr = lookup_res(device_get_softc(dev), PCIR_BIOS);
+	vr = lookup_res(device_get_softc(dev), rid);
 	KASSERT(vr->vr_res != NULL, ("vga_pci_unmap_bios: bios not mapped"));
 	KASSERT(rman_get_virtual(vr->vr_res) == bios,
 	    ("vga_pci_unmap_bios: mismatch"));
-	vga_pci_release_resource(dev, NULL, SYS_RES_MEMORY, PCIR_BIOS,
+	vga_pci_release_resource(dev, NULL, SYS_RES_MEMORY, rid,
 	    vr->vr_res);
 }
 
