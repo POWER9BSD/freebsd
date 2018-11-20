@@ -291,7 +291,7 @@ static boolean_t pmap_unwire_ptp(pmap_t pmap, vm_offset_t va, vm_page_t m, struc
 static void mmu_radix_pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma);
 static void pmap_invalidate_page(pmap_t pmap, vm_offset_t start);
 static void pmap_invalidate_all(pmap_t pmap);
-static int pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush);
+static int pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool flush);
 
 /*
  * Internal flags for pmap_enter()'s helper functions.
@@ -4625,15 +4625,12 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
     struct rwlock **lockp)
 {
 	pml3_entry_t oldpde;
-	pt_entry_t *firstpte, newpte;
+	pt_entry_t *firstpte;
 	vm_paddr_t mptepa;
 	vm_page_t mpte;
 	struct spglist free;
 	vm_offset_t sva;
 
-#ifndef FULL_FEATURED
-	panic("don't call me!");
-#endif
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
 	oldpde = *l3e;
 	KASSERT((oldpde & (RPTE_LEAF | PG_V)) == (RPTE_LEAF | PG_V),
@@ -4678,16 +4675,16 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	    ("pmap_demote_l3e: oldpde is missing PG_A"));
 	KASSERT((oldpde & (PG_M | PG_RW)) != PG_RW,
 	    ("pmap_demote_l3e: oldpde is missing PG_M"));
-	newpte = oldpde & ~RPTE_LEAF;
 
 	/*
 	 * If the page table page is new, initialize it.
 	 */
 	if (mpte->wire_count == 1) {
 		mpte->wire_count = NPTEPG;
-		pmap_fill_ptp(firstpte, newpte);
+		pmap_fill_ptp(firstpte, oldpde);
 	}
-	KASSERT((*firstpte & PG_FRAME) == (newpte & PG_FRAME),
+
+	KASSERT((*firstpte & PG_FRAME) == (oldpde & PG_FRAME),
 	    ("pmap_demote_l3e: firstpte and newpte map different physical"
 	    " addresses"));
 
@@ -4695,8 +4692,8 @@ pmap_demote_l3e_locked(pmap_t pmap, pml3_entry_t *l3e, vm_offset_t va,
 	 * If the mapping has changed attributes, update the page table
 	 * entries.
 	 */
-	if ((*firstpte & PG_PTE_PROMOTE) != (newpte & PG_PTE_PROMOTE))
-		pmap_fill_ptp(firstpte, newpte);
+	if ((*firstpte & PG_PTE_PROMOTE) != (oldpde & PG_PTE_PROMOTE))
+		pmap_fill_ptp(firstpte, oldpde);
 
 	/*
 	 * The spare PV entries must be reserved prior to demoting the
@@ -5707,7 +5704,7 @@ pmap_pte_attr(pt_entry_t *pte, uint64_t cache_bits, uint64_t mask)
 static boolean_t
 pmap_demote_l2e(pmap_t pmap, pml2_entry_t *l2e, vm_offset_t va)
 {
-	pml2_entry_t newpdpe, oldpdpe;
+	pml2_entry_t oldpdpe;
 	pml3_entry_t *firstpde, newpde, *pde;
 	vm_paddr_t pdpgpa;
 	vm_page_t pdpg;
@@ -5724,7 +5721,6 @@ pmap_demote_l2e(pmap_t pmap, pml2_entry_t *l2e, vm_offset_t va)
 	}
 	pdpgpa = VM_PAGE_TO_PHYS(pdpg);
 	firstpde = (pml3_entry_t *)PHYS_TO_DMAP(pdpgpa);
-	newpdpe = pdpgpa | PG_M | PG_A | (oldpdpe & RPTE_EAA_P) | PG_RW | PG_V;
 	KASSERT((oldpdpe & PG_A) != 0,
 	    ("pmap_demote_pdpe: oldpdpe is missing PG_A"));
 	KASSERT((oldpdpe & (PG_M | PG_RW)) != PG_RW,
@@ -5742,7 +5738,7 @@ pmap_demote_l2e(pmap_t pmap, pml2_entry_t *l2e, vm_offset_t va)
 	/*
 	 * Demote the mapping.
 	 */
-	*l2e = newpdpe;
+	pde_store(l2e, pdpgpa);
 
 	/*
 	 * Flush PWC --- XXX revisit
@@ -5938,13 +5934,13 @@ mmu_radix_pmap_change_attr(vm_offset_t va, vm_size_t size, vm_memattr_t mode)
 
 	CTR4(KTR_PMAP, "%s(%#x, %#zx, %d)", __func__, va, size, mode);
 	PMAP_LOCK(kernel_pmap);
-	error = pmap_change_attr_locked(va, size, mode, false);
+	error = pmap_change_attr_locked(va, size, mode, true);
 	PMAP_UNLOCK(kernel_pmap);
 	return (error);
 }
 
 static int
-pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush)
+pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool flush)
 {
 	vm_offset_t base, offset, tmpva;
 	vm_paddr_t pa_start, pa_end, pa_end1;
@@ -6002,6 +5998,7 @@ pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush)
 				return (ENOMEM);
 		}
 		l3e = pmap_l2e_to_l3e(l2e, tmpva);
+		KASSERT(l3e != NULL, ("no l3e entry for %#lx in %p\n", tmpva, l2e));
 		if (*l3e == 0)
 			return (EINVAL);
 		if (*l3e & RPTE_LEAF) {
@@ -6060,7 +6057,7 @@ pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush)
 					/* Run ended, update direct map. */
 					error = pmap_change_attr_locked(
 					    PHYS_TO_DMAP(pa_start),
-					    pa_end - pa_start, mode, noflush);
+					    pa_end - pa_start, mode, flush);
 					if (error != 0)
 						break;
 					/* Start physical address run. */
@@ -6090,7 +6087,7 @@ pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush)
 					/* Run ended, update direct map. */
 					error = pmap_change_attr_locked(
 					    PHYS_TO_DMAP(pa_start),
-					    pa_end - pa_start, mode, noflush);
+					    pa_end - pa_start, mode, flush);
 					if (error != 0)
 						break;
 					/* Start physical address run. */
@@ -6118,7 +6115,7 @@ pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush)
 					/* Run ended, update direct map. */
 					error = pmap_change_attr_locked(
 					    PHYS_TO_DMAP(pa_start),
-					    pa_end - pa_start, mode, noflush);
+					    pa_end - pa_start, mode, flush);
 					if (error != 0)
 						break;
 					/* Start physical address run. */
@@ -6133,7 +6130,7 @@ pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush)
 		pa_end1 = MIN(pa_end, dmaplimit);
 		if (pa_start != pa_end1)
 			error = pmap_change_attr_locked(PHYS_TO_DMAP(pa_start),
-			    pa_end1 - pa_start, mode, noflush);
+			    pa_end1 - pa_start, mode, flush);
 	}
 
 	/*
@@ -6141,9 +6138,11 @@ pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode, bool noflush)
 	 * shouldn't be, etc.
 	 */
 	if (changed) {
-		pmap_invalidate_range(kernel_pmap, base, tmpva);
-		if (!noflush)
+		pmap_invalidate_all(kernel_pmap);
+
+		if (flush)
 			pmap_invalidate_cache_range(base, tmpva);
+
 	}
 	return (error);
 }
