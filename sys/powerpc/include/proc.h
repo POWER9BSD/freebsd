@@ -46,9 +46,9 @@ struct pmap_invl_gen {
  * Machine-dependent part of the proc structure
  */
 struct mdthread {
+	register_t md_saved_msr;        /* (k) */
 	int	md_spinlock_count;	/* (k) */
-	register_t md_saved_msr;	/* (k) */
-	register_t md_spurflt_addr;	/* (k) Spurious page fault address. */
+	int md_retnest;
 	struct pmap_invl_gen md_invl_gen;
 };
 

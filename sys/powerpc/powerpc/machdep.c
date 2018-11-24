@@ -546,6 +546,40 @@ cpu_flush_dcache(void *ptr, size_t len)
 	}
 }
 
+static __noinline void
+cpu_critical_exit_preempt(register_t msr)
+{
+	struct thread *td;
+	int flags;
+
+	td = curthread;
+	if (__predict_false(td->td_critnest) ||
+		td->td_md.md_retnest ||
+		kdb_active) {
+		/* force interrupts back on */
+		mtmsr_ee(msr | PSL_EE);
+		return;
+	}
+	td->td_md.md_retnest = 1;
+	/*
+	 * Microoptimization: we committed to switch,
+	 * disable preemption in interrupt handlers
+	 * while spinning for the thread lock.
+	 */
+	td->td_critnest = 1;
+	mtmsr_ee(msr | PSL_EE);
+	thread_lock(td);
+	td->td_critnest--;
+	flags = SW_INVOL | SW_PREEMPT;
+	if (TD_IS_IDLETHREAD(td))
+		flags |= SWT_IDLE;
+	else
+		flags |= SWT_OWEPREEMPT;
+	mi_switch(flags, NULL);
+	thread_unlock(td);
+	td->td_md.md_retnest = 0;
+}
+
 int
 ptrace_set_pc(struct thread *td, unsigned long addr)
 {
@@ -599,20 +633,12 @@ __intr_restore_soft(register_t flags)
 		td->td_md.md_spinlock_count--;
 	}
 	pc->pc_intr_flags |= PPC_INTR_ENABLE;
-	/* force interrupts back on */
-	__compiler_membar();
-	mtmsr_ee(msr | PSL_EE);
-	__compiler_membar();
-
-	if (__predict_false(td->td_owepreempt) &&
-		/*
-		 * We need to check for this here
-		 * to avoid spuriously clearing it
-		 */
-		td->td_critnest == 0) {
-		/* We need to clear this to avoid recursion */
-		td->td_owepreempt = 0;
-		critical_exit_preempt();
+	if (__predict_false(td->td_owepreempt)) {
+		cpu_critical_exit_preempt(msr);
+		/* returns with interrupts enabled */
+	} else {
+		/* force interrupts back on */
+		mtmsr_ee(msr | PSL_EE);
 	}
 }
 
