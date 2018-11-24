@@ -58,14 +58,6 @@ __FBSDID("$FreeBSD$");
 #include <linux/pci.h>
 #include <linux/compat.h>
 
-#ifdef KLD_MODULE
-/*
- * Not getting seen in the module build somehow
- */
-int	bus_generic_translate_resource(device_t dev, int type, rman_res_t start,
-			      rman_res_t *newstart);
-#endif
-
 static device_probe_t linux_pci_probe;
 static device_attach_t linux_pci_attach;
 static device_detach_t linux_pci_detach;
